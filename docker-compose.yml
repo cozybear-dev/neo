@@ -1,0 +1,97 @@
+services:
+  dsh:
+    build:
+      context: ./docker/dsh
+    env_file:
+      - .env
+    environment:
+      DSH_HOME: /home/node/.dsh
+      NEO_LLM_PROVIDER: ${NEO_LLM_PROVIDER:-deepseek}
+      NEO_LLM_MODEL: ${NEO_LLM_MODEL:-deepseek-v4-flash}
+      NEO_LLM_API_KEY: ${NEO_LLM_API_KEY:-}
+      NEO_LLM_BASE_URL: ${NEO_LLM_BASE_URL:-}
+      NEO_LLM_API: ${NEO_LLM_API:-}
+      NEO_LLM_REASONING_EFFORT: ${NEO_LLM_REASONING_EFFORT:-}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      PDCP_API_KEY: ${PDCP_API_KEY:-}
+      HACKERONE_API_TOKEN: ${HACKERONE_API_TOKEN:-}
+    volumes:
+      - dsh-home:/home/node/.dsh
+      - workspace:/workspace
+    networks:
+      - control
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sandbox:
+        condition: service_started
+
+  sandbox:
+    build:
+      context: ./docker/sandbox
+    volumes:
+      - workspace:/workspace
+      # Sandbox is the only service allowed to talk to the Docker socket,
+      # and only to create containers on the isolated `targets` network.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - control
+      - targets
+    # Required so docker.sock group permissions work from the neo user later.
+    group_add:
+      - "${DOCKER_GID:-0}"
+
+  browser:
+    build:
+      context: ./docker/browser
+    # 9222 intentionally not published to the host; CDP is control-network only.
+    expose:
+      - "9222"
+    networks:
+      - control
+
+  interactsh:
+    image: projectdiscovery/interactsh-server:latest
+    command: ["-auth", "-skip-acme"]
+    networks:
+      - control
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: neo
+      POSTGRES_PASSWORD: neo
+      POSTGRES_DB: neo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - control
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neo -d neo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  control:
+    build:
+      context: ./docker/control
+    environment:
+      DATABASE_URL: postgres://neo:neo@postgres:5432/neo
+    networks:
+      - control
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  workspace:
+  pgdata:
+  dsh-home:
+
+networks:
+  control:
+    driver: bridge
+  targets:
+    driver: bridge
+    internal: true

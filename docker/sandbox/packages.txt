@@ -1,0 +1,43 @@
+# Sandbox toolchain inventory.
+# Format: name | method | install-spec
+# Versions pinned where practical; @latest used when pins are unreliable.
+
+# --- apt (Ubuntu 24.04) ---
+nmap            | apt | nmap
+sqlmap          | apt | sqlmap
+hydra           | apt | hydra
+john            | apt | john
+git             | apt | git
+curl            | apt | curl
+jq              | apt | jq
+python3         | apt | python3 python3-pip python3-venv
+nodejs          | apt | nodejs npm
+mitmproxy       | apt | mitmproxy
+wireguard-tools | apt | wireguard-tools
+openvpn         | apt | openvpn
+whois           | apt | whois
+bind9-dnsutils  | apt | bind9-dnsutils
+sudo            | apt | sudo
+libpcap         | apt | libpcap-dev libpcap0.8
+
+# --- toolchain (official tarball / nodesource as needed) ---
+golang          | image   | golang:1.24-bookworm (COPY /usr/local/go)
+
+# --- go install (GOBIN=/usr/local/bin) ---
+nuclei              | go | github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+subfinder           | go | github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+dnsx                | go | github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+httpx               | go | github.com/projectdiscovery/httpx/cmd/httpx@latest
+naabu               | go | github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+katana              | go | github.com/projectdiscovery/katana/cmd/katana@latest
+tlsx                | go | github.com/projectdiscovery/tlsx/cmd/tlsx@latest
+vulnx               | go | github.com/projectdiscovery/vulnx/v2/cmd/vulnx@latest
+interactsh-client   | go | github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest
+ffuf                | go | github.com/ffuf/ffuf/v2@latest
+gitleaks            | go | github.com/zricethezav/gitleaks/v8@latest
+trufflehog          | release | scripts/install.sh -b /usr/local/bin
+chisel              | go | github.com/jpillora/chisel@latest
+kerbrute            | go | github.com/ropnop/kerbrute@latest
+
+# --- pip ---
+semgrep         | pip-venv | /opt/semgrep-venv + /usr/local/bin/semgrep

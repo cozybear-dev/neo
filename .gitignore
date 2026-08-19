@@ -1,0 +1,24 @@
+.env
+.env.local
+.env.*.local
+
+node_modules/
+dist/
+build/
+coverage/
+*.log
+
+# Local compose / volume leftovers
+pgdata/
+dsh-home/
+workspace/
+
+# Agent / SDD working files
+.superpowers/sdd/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
