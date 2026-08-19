@@ -68,6 +68,8 @@ services:
       POSTGRES_USER: neo
       POSTGRES_PASSWORD: neo
       POSTGRES_DB: neo
+    ports:
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
@@ -80,9 +82,18 @@ services:
 
   control:
     build:
-      context: ./docker/control
+      context: .
+      dockerfile: docker/control/Dockerfile
     environment:
       DATABASE_URL: postgres://neo:neo@postgres:5432/neo
+      NEO_ALLOWLIST: ${NEO_ALLOWLIST:-localhost,127.0.0.1,*.lab.internal,juice-shop}
+      PORT: "8090"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     networks:
       - control
     depends_on:
