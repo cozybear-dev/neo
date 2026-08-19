@@ -1,0 +1,12 @@
+.git
+.superpowers
+**/.DS_Store
+**/node_modules
+workspace
+pgdata
+dsh-home
+coverage
+*.log
+.env
+.env.local
+.env.*.local

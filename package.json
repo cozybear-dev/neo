@@ -1,0 +1,8 @@
+{
+  "name": "neo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/unit/llm-settings.test.ts"
+  }
+}

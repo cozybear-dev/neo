@@ -1,16 +1,19 @@
 services:
   dsh:
     build:
-      context: ./docker/dsh
+      context: .
+      dockerfile: docker/dsh/Dockerfile
     env_file:
       - .env
     environment:
       DSH_HOME: /home/node/.dsh
+      DSH_WEB_SEARCH_PROVIDER: exa
       NEO_LLM_PROVIDER: ${NEO_LLM_PROVIDER:-deepseek}
       NEO_LLM_MODEL: ${NEO_LLM_MODEL:-deepseek-v4-flash}
       NEO_LLM_API_KEY: ${NEO_LLM_API_KEY:-}
       NEO_LLM_BASE_URL: ${NEO_LLM_BASE_URL:-}
       NEO_LLM_API: ${NEO_LLM_API:-}
+      NEO_LLM_API_KEY_ENV: ${NEO_LLM_API_KEY_ENV:-}
       NEO_LLM_REASONING_EFFORT: ${NEO_LLM_REASONING_EFFORT:-}
       EXA_API_KEY: ${EXA_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
@@ -19,6 +22,8 @@ services:
     volumes:
       - dsh-home:/home/node/.dsh
       - workspace:/workspace
+    ports:
+      - "3080:3080"
     networks:
       - control
     depends_on:

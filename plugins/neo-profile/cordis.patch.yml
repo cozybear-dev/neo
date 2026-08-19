@@ -1,0 +1,24 @@
+# Neo profile overlay, applied after @deepseek-ai/dsh-base and @deepseek-ai/dsh-web-app.
+# A patch replaces the targeted row's whole `config` (no deep merge).
+# Search provider id `exa` is EXA_PROVIDER_ID from dsh-web-search-exa at the pinned SHA.
+
+- id: web-search-deepseek
+  disabled: true
+
+- id: web
+  config:
+    searchProvider: exa
+
+- insert:
+    - id: web-search-exa
+      name: '@deepseek-ai/dsh-web-search-exa'
+      config:
+        apiKey: !!js process.env.EXA_API_KEY
+
+# Compose publishes :3080; the CLI flag --host 0.0.0.0 is refused, so the
+# webserver row binds all interfaces from this overlay instead.
+- id: webserver
+  inject: [webStartup]
+  config:
+    host: '0.0.0.0'
+    port: !!js ctx.webStartup.port ?? 3080
