@@ -370,6 +370,9 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance> 
     if (!['unverified', 'confirmed', 'open', 'false_positive'].includes(next.status)) {
       return reply.code(400).send({ error: 'invalid status' })
     }
+    if (next.status === 'confirmed' && next.verdict !== 'confirmed') {
+      return reply.code(400).send({ error: 'status confirmed requires verdict=confirmed' })
+    }
 
     const updated = await pool.query(
       `UPDATE issues SET

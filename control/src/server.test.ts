@@ -334,4 +334,32 @@ describe('control API (postgres)', { skip: !live }, () => {
     assert.equal(patched.statusCode, 200)
     assert.equal(patched.json().status, 'false_positive')
   })
+
+  it('rejects PATCH status=confirmed without verdict=confirmed', async () => {
+    const createTask = await app.inject({
+      method: 'POST',
+      url: '/tasks',
+      payload: { mode: 'fast', objective: 'patch-confirmed', allowlist: ['localhost'] },
+    })
+    const taskId = createTask.json().id as string
+    const created = await app.inject({
+      method: 'POST',
+      url: '/issues',
+      payload: {
+        task_id: taskId,
+        title: 'unconfirmed finding',
+        severity: 'high',
+        verdict: 'suspected',
+      },
+    })
+    const issueId = created.json().id as string
+
+    const rejected = await app.inject({
+      method: 'PATCH',
+      url: `/issues/${issueId}`,
+      payload: { status: 'confirmed' },
+    })
+    assert.equal(rejected.statusCode, 400)
+    assert.match(rejected.json().error, /verdict=confirmed/)
+  })
 })
