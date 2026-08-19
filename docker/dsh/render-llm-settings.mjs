@@ -26,7 +26,6 @@ const PROVIDERS = {
 }
 
 const API_KEY_ENV_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
-const OWNED_NAMESPACES = new Set(['agent-default-model', 'llm-pi-ai'])
 
 export class LlmSettingsError extends Error {
   constructor(message) {
@@ -124,73 +123,148 @@ export function mappedCredentialEnv(selection) {
   return mapped
 }
 
-/**
- * Render owned settings.yaml namespaces. deepseek → no llm-pi-ai / custom block.
- * @param {ReturnType<typeof resolveLlmSelection>} selection
- */
-export function renderOwnedSettings(selection) {
-  const defaultModel = [
+function renderAgentDefaultModel(selection) {
+  const lines = [
     'agent-default-model:',
     `  provider: ${yamlScalar(selection.route)}`,
     `  model: ${yamlScalar(selection.model)}`,
   ]
   if (selection.reasoningEffort !== undefined) {
-    defaultModel.push(`  reasoningEffort: ${yamlScalar(selection.reasoningEffort)}`)
+    lines.push(`  reasoningEffort: ${yamlScalar(selection.reasoningEffort)}`)
   }
+  return `${lines.join('\n')}\n`
+}
 
-  if (selection.kind === 'native') {
-    return `${defaultModel.join('\n')}\n`
-  }
-
-  const profileLines = [
-    `      apiKeyEnv: ${yamlScalar(selection.keyEnvName)}`,
-  ]
-  if (selection.kind === 'custom') {
-    profileLines.push(`      api: ${yamlScalar(selection.api)}`)
-    profileLines.push(`      baseURL: ${yamlScalar(selection.baseURL)}`)
-    profileLines.push('      models:')
-    profileLines.push(`        - id: ${yamlScalar(selection.model)}`)
-  }
-
+function renderCustomProviderBlock(selection) {
   return [
-    ...defaultModel,
-    'llm-pi-ai:',
-    '  providers:',
     `    ${selection.route}:`,
-    ...profileLines,
-    '',
+    `      apiKeyEnv: ${yamlScalar(selection.keyEnvName)}`,
+    `      api: ${yamlScalar(selection.api)}`,
+    `      baseURL: ${yamlScalar(selection.baseURL)}`,
+    '      models:',
+    `        - id: ${yamlScalar(selection.model)}`,
   ].join('\n')
 }
 
 /**
- * Drop previously written agent-default-model / llm-pi-ai sections so env wins.
+ * Render env-owned settings. Catalog/native only set agent-default-model
+ * (credentials are the mapped process env). Custom upserts a full llm-pi-ai
+ * provider object. Catalog routes must not emit a stripped llm-pi-ai profile
+ * that would wipe api / models / baseURL on merge.
+ * @param {ReturnType<typeof resolveLlmSelection>} selection
+ */
+export function renderOwnedSettings(selection) {
+  const defaultModel = renderAgentDefaultModel(selection)
+  if (selection.kind !== 'custom') return defaultModel
+  return `${defaultModel}llm-pi-ai:\n  providers:\n${renderCustomProviderBlock(selection)}\n`
+}
+
+function splitTopLevel(yaml) {
+  const lines = String(yaml).replace(/\r\n/g, '\n').split('\n')
+  const sections = []
+  let current = null
+  for (const line of lines) {
+    const top = /^([A-Za-z0-9_-]+)\s*:/.exec(line)
+    if (top && !/^\s/.test(line)) {
+      if (current) sections.push(current)
+      current = { key: top[1], lines: [line] }
+    } else if (current) {
+      current.lines.push(line)
+    } else if (line.trim() !== '') {
+      sections.push({ key: null, lines: [line] })
+    }
+  }
+  if (current) sections.push(current)
+  return sections
+}
+
+function joinSections(sections) {
+  return sections
+    .map((section) => section.lines.join('\n').replace(/\n+$/, ''))
+    .filter((block) => block.length > 0)
+    .join('\n\n')
+}
+
+/**
+ * Drop a previously written agent-default-model section. llm-pi-ai is left
+ * intact so catalog api / models / baseURL survive a catalog boot.
  * @param {string} yaml
  */
 export function stripOwnedNamespaces(yaml) {
   if (trim(yaml) === '') return ''
-  const lines = yaml.split(/\r?\n/)
-  const kept = []
-  let skipping = false
-  for (const line of lines) {
-    const top = /^([A-Za-z0-9_-]+)\s*:/.exec(line)
-    if (top && !/^\s/.test(line)) {
-      skipping = OWNED_NAMESPACES.has(top[1])
-    }
-    if (!skipping) kept.push(line)
+  return joinSections(splitTopLevel(yaml).filter((section) => section.key !== 'agent-default-model'))
+}
+
+function upsertCustomProvider(yaml, selection) {
+  const providerBlock = renderCustomProviderBlock(selection)
+  const sections = splitTopLevel(yaml)
+  const idx = sections.findIndex((section) => section.key === 'llm-pi-ai')
+  if (idx === -1) {
+    sections.push({
+      key: 'llm-pi-ai',
+      lines: ['llm-pi-ai:', '  providers:', ...providerBlock.split('\n')],
+    })
+    return joinSections(sections)
   }
-  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  const lines = sections[idx].lines
+  const providersIdx = lines.findIndex((line) => /^  providers\s*:/.test(line))
+  if (providersIdx === -1) {
+    sections[idx] = {
+      key: 'llm-pi-ai',
+      lines: [lines[0], '  providers:', ...providerBlock.split('\n')],
+    }
+    return joinSections(sections)
+  }
+  const head = lines.slice(0, providersIdx + 1)
+  const tail = lines.slice(providersIdx + 1)
+  const blocks = []
+  let current = null
+  const afterProviders = []
+  for (const line of tail) {
+    const providerKey = /^    ([A-Za-z0-9_-]+)\s*:/.exec(line)
+    if (providerKey) {
+      if (current) blocks.push(current)
+      current = { key: providerKey[1], lines: [line] }
+      continue
+    }
+    if (current && (line.trim() === '' || /^\s{5,}/.test(line))) {
+      current.lines.push(line)
+      continue
+    }
+    if (current) {
+      blocks.push(current)
+      current = null
+    }
+    afterProviders.push(line)
+  }
+  if (current) blocks.push(current)
+  const kept = blocks.filter((block) => block.key !== selection.route)
+  sections[idx] = {
+    key: 'llm-pi-ai',
+    lines: [
+      ...head,
+      ...kept.flatMap((block) => block.lines),
+      ...providerBlock.split('\n'),
+      ...afterProviders,
+    ],
+  }
+  return joinSections(sections)
 }
 
 /**
- * Merge owned namespaces over an existing settings.yaml body.
+ * Env wins for agent-default-model on every boot. Catalog/native leave
+ * llm-pi-ai.providers.* untouched. Custom upserts only the custom route.
  * @param {string} existing
  * @param {ReturnType<typeof resolveLlmSelection>} selection
  */
 export function mergeSettingsYaml(existing, selection) {
-  const rest = stripOwnedNamespaces(existing)
-  const owned = renderOwnedSettings(selection).trimEnd()
-  if (rest === '') return `${owned}\n`
-  return `${rest}\n\n${owned}\n`
+  let rest = stripOwnedNamespaces(existing)
+  if (selection.kind === 'custom') {
+    rest = upsertCustomProvider(rest, selection)
+  }
+  const defaultModel = renderAgentDefaultModel(selection).trimEnd()
+  if (rest === '') return `${defaultModel}\n`
+  return `${rest}\n\n${defaultModel}\n`
 }
 
 function shSingleQuote(value) {

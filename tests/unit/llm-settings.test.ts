@@ -93,15 +93,22 @@ describe('renderOwnedSettings', () => {
     assert.match(yaml, /- id: "qwen3:8b"/)
   })
 
-  it('openai catalog route writes llm-pi-ai.providers.openai', () => {
+  it('openai catalog route does not emit a stripped llm-pi-ai provider', () => {
     const yaml = renderOwnedSettings(resolveLlmSelection({
       NEO_LLM_PROVIDER: 'openai',
       NEO_LLM_MODEL: 'gpt-4.1',
       NEO_LLM_API_KEY: 'sk-openai',
     }))
     assert.match(yaml, /provider: "openai"/)
-    assert.match(yaml, /apiKeyEnv: "OPENAI_API_KEY"/)
+    assert.match(yaml, /model: "gpt-4.1"/)
+    assert.doesNotMatch(yaml, /llm-pi-ai:/)
+    assert.doesNotMatch(yaml, /apiKeyEnv:/)
     assert.doesNotMatch(yaml, /baseURL:/)
+    assert.equal(mappedCredentialEnv(resolveLlmSelection({
+      NEO_LLM_PROVIDER: 'openai',
+      NEO_LLM_MODEL: 'gpt-4.1',
+      NEO_LLM_API_KEY: 'sk-openai',
+    })).OPENAI_API_KEY, 'sk-openai')
   })
 })
 
@@ -154,29 +161,58 @@ describe('validation', () => {
 })
 
 describe('mergeSettingsYaml env wins', () => {
-  it('replaces a leftover custom block when switching to deepseek', () => {
+  it('openai does not wipe catalog llm-pi-ai api / models / baseURL', () => {
     const existing = [
-      'locale:',
-      '  preference: en',
       'llm-pi-ai:',
       '  providers:',
-      '    custom:',
-      '      baseURL: http://old.example/v1',
+      '    openai:',
+      '      apiKeyEnv: OPENAI_API_KEY',
+      '      api: openai-completions',
+      '      baseURL: https://proxy.example.com:8443',
+      '      models:',
+      '        - id: gpt-4.1',
+      '          contextWindow: 200000',
       'agent-default-model:',
-      '  provider: custom',
-      '  model: old',
+      '  provider: openai',
+      '  model: stale',
       '',
     ].join('\n')
     const yaml = mergeSettingsYaml(existing, resolveLlmSelection({
-      NEO_LLM_PROVIDER: 'deepseek',
-      NEO_LLM_MODEL: 'deepseek-v4-flash',
-      NEO_LLM_API_KEY: 'sk-test',
+      NEO_LLM_PROVIDER: 'openai',
+      NEO_LLM_MODEL: 'gpt-4.1',
+      NEO_LLM_API_KEY: 'sk-openai',
     }))
-    assert.match(yaml, /locale:/)
-    assert.match(yaml, /preference: en/)
-    assert.match(yaml, /provider: "deepseek-official"/)
-    assert.doesNotMatch(yaml, /llm-pi-ai:/)
-    assert.doesNotMatch(yaml, /baseURL:/)
+    assert.match(yaml, /provider: "openai"/)
+    assert.match(yaml, /model: "gpt-4.1"/)
+    assert.match(yaml, /api: openai-completions/)
+    assert.match(yaml, /baseURL: https:\/\/proxy\.example\.com:8443/)
+    assert.match(yaml, /id: gpt-4.1/)
+    assert.match(yaml, /contextWindow: 200000/)
+    assert.doesNotMatch(yaml, /model: stale/)
+  })
+
+  it('custom upserts baseURL + models without dropping a sibling catalog route', () => {
+    const existing = [
+      'llm-pi-ai:',
+      '  providers:',
+      '    openai:',
+      '      apiKeyEnv: OPENAI_API_KEY',
+      '      models:',
+      '        - id: gpt-4.1',
+      '',
+    ].join('\n')
+    const yaml = mergeSettingsYaml(existing, resolveLlmSelection({
+      NEO_LLM_PROVIDER: 'custom',
+      NEO_LLM_MODEL: 'qwen3:8b',
+      NEO_LLM_BASE_URL: 'http://host.docker.internal:11434/v1',
+      NEO_LLM_API_KEY: 'ollama',
+    }))
+    assert.match(yaml, /openai:/)
+    assert.match(yaml, /id: gpt-4.1/)
+    assert.match(yaml, /custom:/)
+    assert.match(yaml, /baseURL: "http:\/\/host\.docker\.internal:11434\/v1"/)
+    assert.match(yaml, /- id: "qwen3:8b"/)
+    assert.match(yaml, /provider: "custom"/)
   })
 })
 
@@ -224,26 +260,41 @@ describe('renderer CLI', () => {
       assert.equal(result.status, 0, result.stderr)
       const document = await readFile(join(dir, 'settings.yaml'), 'utf8')
       assert.match(document, /provider: "openrouter"/)
-      assert.match(document, /apiKeyEnv: "OPENROUTER_API_KEY"/)
+      assert.doesNotMatch(document, /llm-pi-ai:/)
+      assert.doesNotMatch(document, /apiKeyEnv:/)
       assert.match(result.stdout, /export OPENROUTER_API_KEY='sk-or'/)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   })
 
-  it('env wins over an existing settings.yaml on disk', async () => {
+  it('catalog merge on disk keeps existing llm-pi-ai provider fields', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'neo-llm-'))
     try {
-      await writeFile(join(dir, 'settings.yaml'), 'llm-pi-ai:\n  providers:\n    custom:\n      baseURL: http://stale\n')
+      await writeFile(
+        join(dir, 'settings.yaml'),
+        [
+          'llm-pi-ai:',
+          '  providers:',
+          '    openai:',
+          '      api: openai-completions',
+          '      baseURL: https://gateway.example/v1',
+          '      models:',
+          '        - id: gpt-4.1',
+          '',
+        ].join('\n'),
+      )
       const result = runRenderer(['--dsh-home', dir], {
-        NEO_LLM_PROVIDER: 'deepseek',
-        NEO_LLM_MODEL: 'deepseek-v4-flash',
-        NEO_LLM_API_KEY: 'sk-test',
+        NEO_LLM_PROVIDER: 'openai',
+        NEO_LLM_MODEL: 'gpt-4.1',
+        NEO_LLM_API_KEY: 'sk-openai',
       })
       assert.equal(result.status, 0, result.stderr)
       const document = await readFile(join(dir, 'settings.yaml'), 'utf8')
-      assert.doesNotMatch(document, /baseURL:/)
-      assert.match(document, /deepseek-official/)
+      assert.match(document, /provider: "openai"/)
+      assert.match(document, /baseURL: https:\/\/gateway\.example\/v1/)
+      assert.match(document, /api: openai-completions/)
+      assert.match(document, /id: gpt-4.1/)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
