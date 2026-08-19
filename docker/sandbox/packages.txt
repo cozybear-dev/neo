@@ -1,6 +1,6 @@
 # Sandbox toolchain inventory.
 # Format: name | method | install-spec
-# Versions pinned where practical; @latest used when pins are unreliable.
+# Go modules pinned to release tags looked up 2026-08-20.
 
 # --- apt (Ubuntu 24.04) ---
 nmap            | apt | nmap
@@ -23,21 +23,24 @@ libpcap         | apt | libpcap-dev libpcap0.8
 # --- toolchain (official tarball / nodesource as needed) ---
 golang          | image   | golang:1.24-bookworm (COPY /usr/local/go)
 
-# --- go install (GOBIN=/usr/local/bin) ---
-nuclei              | go | github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-subfinder           | go | github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
-dnsx                | go | github.com/projectdiscovery/dnsx/cmd/dnsx@latest
-httpx               | go | github.com/projectdiscovery/httpx/cmd/httpx@latest
-naabu               | go | github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
-katana              | go | github.com/projectdiscovery/katana/cmd/katana@latest
-tlsx                | go | github.com/projectdiscovery/tlsx/cmd/tlsx@latest
-vulnx               | go | github.com/projectdiscovery/vulnx/v2/cmd/vulnx@latest
-interactsh-client   | go | github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest
-ffuf                | go | github.com/ffuf/ffuf/v2@latest
-gitleaks            | go | github.com/zricethezav/gitleaks/v8@latest
-trufflehog          | release | scripts/install.sh -b /usr/local/bin
-chisel              | go | github.com/jpillora/chisel@latest
-kerbrute            | go | github.com/ropnop/kerbrute@latest
+# --- go install (GOBIN=/usr/local/bin); required — fail build on error ---
+nuclei              | go | github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.11.1
+subfinder           | go | github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.15.0
+dnsx                | go | github.com/projectdiscovery/dnsx/cmd/dnsx@v1.3.0
+httpx               | go | github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0
+naabu               | go | github.com/projectdiscovery/naabu/v2/cmd/naabu@v2.6.1
+katana              | go | github.com/projectdiscovery/katana/cmd/katana@v1.7.0
+tlsx                | go | github.com/projectdiscovery/tlsx/cmd/tlsx@v1.3.0
+vulnx               | go | github.com/projectdiscovery/vulnx/v2/cmd/vulnx@v2.0.2
+interactsh-client   | go | github.com/projectdiscovery/interactsh/cmd/interactsh-client@v1.3.1
+ffuf                | go | github.com/ffuf/ffuf/v2@v2.2.1
+gitleaks            | go | github.com/zricethezav/gitleaks/v8@v8.30.1
+chisel              | go | github.com/jpillora/chisel@v1.11.8
+kerbrute            | go | github.com/ropnop/kerbrute@v1.0.3
+trufflehog          | release | install.sh -b /usr/local/bin (fail-hard; latest release v3.97.0 at pin time)
 
 # --- pip ---
-semgrep         | pip-venv | /opt/semgrep-venv + /usr/local/bin/semgrep
+semgrep         | pip-venv | /opt/semgrep-venv + /usr/local/bin/semgrep (fail-hard)
+
+# Optional niceties (wordlist curl may soft-fail):
+# SecLists common.txt / raft-small-words.txt under /opt/wordlists

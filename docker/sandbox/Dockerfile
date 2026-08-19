@@ -41,36 +41,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && go version
 
-# ProjectDiscovery + companion Go CLIs. Failures for non-critical tools are logged;
-# nuclei is required and installed first.
+# Required Go CLIs — any failure fails the layer (brief-required toolchain).
 RUN set -eux; \
-    go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest; \
+    go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.11.1; \
     nuclei -version; \
-    go install -v github.com/projectdiscovery/vulnx/cmd/vulnx@latest \
-      || go install -v github.com/projectdiscovery/vulnx/v2/cmd/vulnx@latest \
-      || echo "WARN: go install failed for vulnx"; \
-    for pkg in \
-      github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
-      github.com/projectdiscovery/dnsx/cmd/dnsx@latest \
-      github.com/projectdiscovery/httpx/cmd/httpx@latest \
-      github.com/projectdiscovery/naabu/v2/cmd/naabu@latest \
-      github.com/projectdiscovery/katana/cmd/katana@latest \
-      github.com/projectdiscovery/tlsx/cmd/tlsx@latest \
-      github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest \
-      github.com/ffuf/ffuf/v2@latest \
-      github.com/zricethezav/gitleaks/v8@latest \
-      github.com/jpillora/chisel@latest \
-      github.com/ropnop/kerbrute@latest \
-    ; do \
-      go install -v "$pkg" || echo "WARN: go install failed for $pkg"; \
-    done; \
+    go install -v github.com/projectdiscovery/vulnx/v2/cmd/vulnx@v2.0.2; \
+    go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.15.0; \
+    go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@v1.3.0; \
+    go install -v github.com/projectdiscovery/httpx/cmd/httpx@v1.10.0; \
+    go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@v2.6.1; \
+    go install -v github.com/projectdiscovery/katana/cmd/katana@v1.7.0; \
+    go install -v github.com/projectdiscovery/tlsx/cmd/tlsx@v1.3.0; \
+    go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@v1.3.1; \
+    go install -v github.com/ffuf/ffuf/v2@v2.2.1; \
+    go install -v github.com/zricethezav/gitleaks/v8@v8.30.1; \
+    go install -v github.com/jpillora/chisel@v1.11.8; \
+    go install -v github.com/ropnop/kerbrute@v1.0.3; \
     rm -rf /root/go/pkg /opt/go/pkg /tmp/*
 
 # trufflehog: release binary (go install fails due to replace directives / layout).
-RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-      | sh -s -- -b /usr/local/bin \
-    && trufflehog --version \
-    || echo "WARN: trufflehog install failed"
+RUN set -eux; \
+    curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+      | sh -s -- -b /usr/local/bin; \
+    trufflehog --version
 
 # Install semgrep into an isolated venv to avoid Debian pip RECORD conflicts.
 RUN python3 -m venv /opt/semgrep-venv \

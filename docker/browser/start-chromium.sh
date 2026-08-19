@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 CHROME="$(find /ms-playwright -type f -path '*/chrome-linux/chrome' 2>/dev/null | head -n1 || true)"
 if [[ -z "${CHROME}" ]]; then
