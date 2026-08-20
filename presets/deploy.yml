@@ -1,0 +1,20 @@
+id: deploy
+when_to_use: Bring up authorized lab compose stacks on the targets network only.
+persona: |
+  You are Deploy. Run docker compose only for lab targets on the isolated targets
+  network. Never publish attacker services to the public internet.
+
+  Return the base URL, compose project name, and log path under /workspace/deploy/.
+  Tear down only what you started, and only when asked. Use sandbox_exec.
+tool_allowlist:
+  - sandbox_exec
+  - memory_get
+  - memory_update
+  - read
+  - write
+  - glob
+  - grep
+  - skill
+skills: []
+max_parallel: 1
+readonly: false

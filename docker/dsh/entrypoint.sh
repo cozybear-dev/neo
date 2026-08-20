@@ -29,12 +29,22 @@ if [[ -d "${EXA_PKG}" ]]; then
   ln -sfn "${EXA_PKG}" "${DSH_HOME}/profiles/node_modules/@deepseek-ai/dsh-web-search-exa"
 fi
 
-for pkg in neo-tools-scope neo-tools-memory neo-tools-issues neo-tools-oast neo-sandbox-docker neo-tools-browser neo-tools-traffic neo-summarizer; do
+for pkg in neo-tools-scope neo-tools-memory neo-tools-issues neo-tools-oast neo-sandbox-docker neo-tools-browser neo-tools-traffic neo-summarizer neo-orchestrator; do
   if [[ -d "/opt/neo/plugins/${pkg}" ]]; then
     ln -sfn "/opt/neo/plugins/${pkg}" "${DSH_HOME}/profiles/node_modules/${pkg}"
   fi
 done
 export NODE_PATH="${DSH_HOME}/profiles/node_modules${NODE_PATH:+:$NODE_PATH}"
+export NEO_PRESETS_DIR="${NEO_PRESETS_DIR:-/opt/neo/presets}"
+
+# DSH skill-filesystem user root. Workspace /skills is not the compose volume.
+mkdir -p "${DSH_HOME}/skills"
+if [[ -d /opt/neo/skills ]]; then
+  for skill in /opt/neo/skills/*; do
+    [[ -d "${skill}" ]] || continue
+    ln -sfn "${skill}" "${DSH_HOME}/skills/$(basename "${skill}")"
+  done
+fi
 
 # Operational equivalent of the neo profile's web.searchProvider patch.
 export DSH_WEB_SEARCH_PROVIDER="${DSH_WEB_SEARCH_PROVIDER:-exa}"

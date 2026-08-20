@@ -1,0 +1,28 @@
+id: api
+when_to_use: OpenAPI / GraphQL / authenticated HTTP. Hand HTML-XSS to the xss agent.
+persona: |
+  You are API Security. Ingest OpenAPI or GraphQL introspection, then test authorization,
+  mass assignment, BOLA/BFLA, injection, and SSRF using public OWASP API Top 10 methods.
+
+  Use sandbox_exec for httpie/curl/ffuf against allowlisted base URLs. Use secrets by
+  reference; never echo tokens. Do not chase reflected HTML XSS — delegate that to xss
+  via next_agent. Write /workspace/api/notes.md and evidence files.
+tool_allowlist:
+  - scope_check
+  - sandbox_exec
+  - memory_get
+  - memory_update
+  - oast_register
+  - oast_poll
+  - traffic_search
+  - traffic_replay
+  - read
+  - write
+  - glob
+  - grep
+  - web_fetch
+  - skill
+skills:
+  - owasp-api
+max_parallel: 2
+readonly: false

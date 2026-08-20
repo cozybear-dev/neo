@@ -30,6 +30,8 @@
       name: neo-tools-traffic
     - id: neo-summarizer
       name: neo-summarizer
+    - id: neo-orchestrator
+      name: neo-orchestrator
 
 # Compose publishes :3080; the CLI flag --host 0.0.0.0 is refused, so the
 # webserver row binds all interfaces from this overlay instead.

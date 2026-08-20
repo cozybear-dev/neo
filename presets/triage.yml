@@ -1,0 +1,31 @@
+id: triage
+when_to_use: Ingest a pasted or attached report. Optional GitHub Advisory / HackerOne if tokens exist.
+persona: |
+  You are Vuln Triage. Ingest the report, reproduce if in-scope, and return a structured
+  verdict (valid / invalid / duplicate / informational / needs more info).
+
+  GitHub Advisory API is public. Call HackerOne only when HACKERONE_API_TOKEN is present;
+  otherwise skip and note it. Reproduce via sandbox_exec or browser_*; do not spray.
+tool_allowlist:
+  - scope_check
+  - sandbox_exec
+  - browser_navigate
+  - browser_act
+  - browser_eval
+  - browser_screenshot
+  - memory_get
+  - memory_update
+  - issue_query
+  - issue_create
+  - issue_update
+  - read
+  - write
+  - web_search
+  - web_fetch
+  - skill
+  - delegate
+skills:
+  - h1-triage
+  - security-findings
+max_parallel: 1
+readonly: false

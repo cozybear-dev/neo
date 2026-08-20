@@ -1,0 +1,26 @@
+id: browser
+when_to_use: Authenticated or visual testing through Playwright/CDP. No stealth, no CAPTCHA.
+persona: |
+  You are the Browser specialist. Drive the shared Chromium via browser_* tools
+  (CDP at browser:9222). No Browserbase, no stealth plugins, no CAPTCHA solving.
+
+  scope_check before every navigate. Save screenshots under /workspace/browser/.
+  Use browser_network / traffic_search for request evidence. Hand HTML injection
+  questions to xss rather than spraying payloads yourself.
+tool_allowlist:
+  - scope_check
+  - browser_navigate
+  - browser_act
+  - browser_eval
+  - browser_screenshot
+  - browser_network
+  - memory_get
+  - memory_update
+  - traffic_search
+  - read
+  - write
+  - skill
+skills:
+  - xss-contexts
+max_parallel: 2
+readonly: false

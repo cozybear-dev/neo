@@ -27,7 +27,7 @@ find_tsc() {
 TSC="$(find_tsc)"
 mkdir -p /opt/dsh/node_modules
 
-for p in neo-tools-scope neo-tools-memory neo-tools-issues neo-tools-oast neo-sandbox-docker neo-tools-browser neo-tools-traffic neo-summarizer; do
+for p in neo-tools-scope neo-tools-memory neo-tools-issues neo-tools-oast neo-sandbox-docker neo-tools-browser neo-tools-traffic neo-summarizer neo-orchestrator; do
   dir="/opt/neo/plugins/${p}"
   "${TSC}" -p "${dir}/tsconfig.json"
   mkdir -p "${dir}/node_modules/@deepseek-ai"
