@@ -19,7 +19,6 @@ tool_allowlist:
   - glob
   - grep
   - web_search
-  - web_fetch
   - skill
 skills:
   - vpn-guide

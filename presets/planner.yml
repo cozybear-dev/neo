@@ -19,7 +19,6 @@ tool_allowlist:
   - grep
   - write
   - web_search
-  - web_fetch
   - skill
   - delegate
 skills: []

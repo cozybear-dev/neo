@@ -21,7 +21,6 @@ tool_allowlist:
   - write
   - glob
   - grep
-  - web_fetch
   - skill
 skills:
   - differential-review

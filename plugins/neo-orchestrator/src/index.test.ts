@@ -252,6 +252,7 @@ describe('delegate', () => {
   })
 
   it('drops unknown global tools from toolFilter so restrict() can apply', async () => {
+    // Omit skill (still in planner YAML) to prove live-catalog filtering.
     const known = new Set([
       'delegate',
       'glob',
@@ -259,13 +260,13 @@ describe('delegate', () => {
       'memory_get',
       'memory_update',
       'read',
-      'skill',
       'web_search',
       'write',
     ])
     const planner = getPreset(presets, 'planner')
-    assert.ok(planner.tool_allowlist.includes('web_fetch'))
+    assert.ok(planner.tool_allowlist.includes('skill'))
     assert.ok(planner.tool_allowlist.includes('web_search'))
+    assert.equal(planner.tool_allowlist.includes('web_fetch'), false)
 
     let seen: Record<string, unknown> | undefined
     const result = await executeDelegate(
@@ -307,7 +308,7 @@ describe('delegate', () => {
     )
 
     const allow = (seen?.toolFilter as { allow: string[] }).allow
-    assert.equal(allow.includes('web_fetch'), false)
+    assert.equal(allow.includes('skill'), false)
     assert.ok(allow.includes('web_search'))
     assert.ok(allow.includes('write'))
     assert.equal(result.results[0]!.summary, 'plan written')

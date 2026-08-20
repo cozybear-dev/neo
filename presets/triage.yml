@@ -21,7 +21,6 @@ tool_allowlist:
   - read
   - write
   - web_search
-  - web_fetch
   - skill
   - delegate
 skills:
