@@ -48,6 +48,11 @@ fi
 
 # Operational equivalent of the neo profile's web.searchProvider patch.
 export DSH_WEB_SEARCH_PROVIDER="${DSH_WEB_SEARCH_PROVIDER:-exa}"
+# Isolation is the sandbox container (sandbox_exec). DSH same-world
+# workspace-write has no backend in this image (no bwrap/Landlock) and
+# fail-closes bash/fs with SANDBOX_UNAVAILABLE. Override only if a backend
+# is actually usable.
+export DSH_PERMISSION_MODE="${DSH_PERMISSION_MODE:-danger-full-access}"
 
 if [[ ! -f "${RENDERER}" ]]; then
   echo "neo: missing LLM settings renderer at ${RENDERER}" >&2

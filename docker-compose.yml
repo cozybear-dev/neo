@@ -29,6 +29,9 @@ services:
       SANDBOX_CONTAINER: ${SANDBOX_CONTAINER:-neo-sandbox-1}
       BROWSER_CDP_URL: ${BROWSER_CDP_URL:-http://browser:9222}
       DOCKER_HOST: ${DOCKER_HOST:-unix:///var/run/docker.sock}
+      # Isolation is the sandbox container. DSH same-world workspace-write
+      # fail-closes here (no bwrap/Landlock/ACL runner in this image).
+      DSH_PERMISSION_MODE: ${DSH_PERMISSION_MODE:-danger-full-access}
     volumes:
       - dsh-home:/home/node/.dsh
       - workspace:/workspace
@@ -77,9 +80,23 @@ services:
 
   interactsh:
     image: projectdiscovery/interactsh-server:latest
-    command: ["-auth", "-skip-acme", "-token", "${INTERACTSH_TOKEN:-neo-oast}"]
+    # 1.3+ fatals without -domain ("No domains specified"). A dummy suffix is
+    # enough for in-network HTTP OAST; a real DNS domain is only needed for
+    # internet-facing OOB.
+    command:
+      - -domain
+      - ${INTERACTSH_DOMAIN:-oast.neo.internal}
+      - -auth
+      - -token
+      - ${INTERACTSH_TOKEN:-neo-oast}
+      - -skip-acme
+      - -disable-update-check
+      - -listen-ip
+      - "0.0.0.0"
+    restart: unless-stopped
     networks:
       - control
+      - targets
 
   postgres:
     image: postgres:16-alpine

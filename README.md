@@ -65,12 +65,26 @@ Android and iOS agent presets ship with personas/skills but **fail closed** at r
 | `dsh`        | DeepSeek Harness agent runtime               |
 | `sandbox`    | Security toolchain + shared `/workspace`     |
 | `browser`    | Headless Chromium CDP (internal)             |
-| `interactsh` | OAST server (in-network)                     |
+| `interactsh` | OAST server (in-network; needs `-domain`)    |
 | `postgres`   | Issues + task memory                         |
 | `control`    | Issues/memory HTTP API                       |
 | `juice-shop` | Lab target (`--profile lab`, `targets` only) |
 
 Networks: `control` (orchestration) and `targets` (sandbox + lab apps only).
+
+The `dsh` service sets `DSH_PERMISSION_MODE=danger-full-access`. Isolation is the `sandbox` container (`sandbox_exec`), not DSH’s same-world `workspace-write` backend (bubblewrap / Landlock / macOS `sandbox-exec` / Windows ACL runner). That backend is not usable in this image, and DSH fail-closes rather than running unconfined — you would see:
+
+```
+sandbox mode "workspace-write" is requested but no sandbox backend is usable on this host
+```
+
+Start a **new** chat after this change: existing sessions pin sandbox mode at creation. Override with `DSH_PERMISSION_MODE=workspace-write` only if a backend is actually usable.
+
+Interactsh 1.3+ requires a domain and will exit with `No domains specified` if you omit it. Compose passes `-domain oast.neo.internal` by default (`INTERACTSH_DOMAIN`). That is a canary suffix for lab HTTP callbacks, not a public DNS zone. Recreate the service after pulling this change:
+
+```bash
+docker compose up -d interactsh
+```
 
 ## Docs
 

@@ -35,6 +35,35 @@
     - id: neo-orchestrator
       name: neo-orchestrator
 
+# Isolation is the sandbox container. DSH same-world confinement
+# (workspace-write) has no backend in Docker/WSL2 and fail-closes.
+# A patch replaces the targeted row's whole config (no deep merge).
+# Folded !!js is required so YAML does not treat `?` as a mapping key.
+- id: sandbox-policy
+  config:
+    mode: !!js process.env.DSH_PERMISSION_MODE ?? 'danger-full-access'
+    workspaceRoot: !!js process.cwd()
+
+- id: approval
+  config:
+    policy: !!js >-
+      (process.env.DSH_PERMISSION_MODE ?? 'danger-full-access') ===
+      'danger-full-access' ? 'never' : 'ask'
+
+- id: permission
+  config:
+    defaultPreset: !!js process.env.DSH_PERMISSION_MODE ?? 'danger-full-access'
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+
 # Compose publishes :3080; the CLI flag --host 0.0.0.0 is refused, so the
 # webserver row binds all interfaces from this overlay instead.
 - id: webserver

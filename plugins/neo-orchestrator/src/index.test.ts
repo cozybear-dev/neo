@@ -362,3 +362,9 @@ describe('catalog prompt', () => {
     }
   })
 })
+
+it('does not read ctx.systemPrompt (requires inject)', () => {
+  const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(src, /ctx\.systemPrompt\b/)
+  assert.match(src, /ctx\.get\(\s*['"]systemPrompt['"]\s*\)/)
+})
