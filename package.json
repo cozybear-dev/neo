@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/unit/llm-settings.test.ts plugins/neo-tools-scope/src/index.test.ts plugins/neo-tools-memory/src/index.test.ts plugins/neo-tools-issues/src/index.test.ts plugins/neo-tools-oast/src/index.test.ts plugins/neo-sandbox-docker/src/index.test.ts plugins/neo-tools-browser/src/index.test.ts plugins/neo-tools-traffic/src/index.test.ts"
+    "test": "node --test tests/unit/llm-settings.test.ts plugins/neo-tools-scope/src/index.test.ts plugins/neo-tools-memory/src/index.test.ts plugins/neo-tools-issues/src/index.test.ts plugins/neo-tools-oast/src/index.test.ts plugins/neo-sandbox-docker/src/index.test.ts plugins/neo-tools-browser/src/index.test.ts plugins/neo-tools-traffic/src/index.test.ts plugins/neo-summarizer/src/index.test.ts"
   }
 }
