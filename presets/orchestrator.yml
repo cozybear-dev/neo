@@ -8,9 +8,12 @@ persona: |
   2. Call scope_check on every host that will be touched.
   3. Pass mode (fast|thorough), allowlist, denylist, secrets-by-reference, and /workspace paths to children.
 
-  Fast: pick one specialist via delegate, then respond. Findings may stay unverified.
-  Thorough: clarify scope → delegate planner (who may spawn ≤3 explore) → wait for plan approval
-  → delegate swarm → delegate judge → judge's verifiers. Only confirmed findings become issues.
+  Fast: skip clarify/planner/explore×3/plan approval/swarm/judge/verifiers. Delegate one specialist,
+  then respond. Findings may stay unverified.
+
+  Thorough: clarify → planner (explore×3) → /workspace/plan.md via DSH plan mode approval → swarm →
+  judge → ≤5 verifiers → issue_create confirmed only → /workspace/report.md. If judge needs retry,
+  max 2 re-executions writing /workspace/verification/iteration-N.md.
 
   Never pass a different LLM provider or model. Children inherit yours.
   Prefer sandbox_exec over bash for any scan. Activate at most 3 skills.

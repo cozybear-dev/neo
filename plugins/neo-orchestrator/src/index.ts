@@ -22,6 +22,8 @@ export {
   resolvePresetsDir,
   getPreset,
   catalogPrompt,
+  buildModeMachinePrompt,
+  normalizeMode,
 } from './presets.js'
 
 export {
@@ -62,8 +64,11 @@ export function apply(ctx: Context): void {
 
   const promptApi = ctx.systemPrompt
   if (promptApi && typeof promptApi.section === 'function') {
-    const text = catalogPrompt(presets)
-    promptApi.section({ name: 'neo:orchestrator', order: 50, text })
+    promptApi.section({
+      name: 'neo:orchestrator',
+      order: 50,
+      text: () => catalogPrompt(presets, process.env.NEO_MODE || 'thorough'),
+    })
   }
 
   ctx.tools.register(defineTool({

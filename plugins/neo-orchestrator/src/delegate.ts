@@ -210,6 +210,7 @@ async function runSpawn(
   const skillsNote = preset.skills.length > 0
     ? `\nActivate at most 3 skills from: ${preset.skills.join(', ')}.`
     : ''
+  const memoryNote = await formatTaskMemoryInject(opts)
   const childPrompt = [
     prompt,
     '',
@@ -217,6 +218,9 @@ async function runSpawn(
     `Write working files under /workspace/agents/${preset.id}/.`,
     skillsNote,
   ].join('\n')
+  const injectBlocks = memoryNote
+    ? [{ type: 'text', text: memoryNote }]
+    : undefined
   const run = await start('spawn', {
     label: preset.id,
     prompt: [{ type: 'text', text: childPrompt }],
@@ -226,9 +230,11 @@ async function runSpawn(
     toolFilter: { allow: preset.tool_allowlist },
     outputSchema: SPECIALIST_OUTPUT_SCHEMA,
     agentOptions: { neoAgentId: preset.id },
+    ...(injectBlocks ? { inject: injectBlocks } : {}),
   })
   try {
     if (run.localAgent && opts.onSpawnedAgent) opts.onSpawnedAgent(run.localAgent, preset.id)
+    await injectIntoAgent(run.localAgent, injectBlocks)
     const result = await run.result
     const text = Array.isArray(result.output)
       ? result.output.map((b) => (typeof b?.text === 'string' ? b.text : '')).join('')
@@ -242,6 +248,50 @@ async function runSpawn(
     return normalizeSpecialist(result.structured, text || `${preset.id} completed`)
   } finally {
     await run.dispose()
+  }
+}
+
+async function formatTaskMemoryInject(opts: DelegateOptions): Promise<string | undefined> {
+  const env = opts.env ?? process.env
+  const taskId = env.NEO_TASK_ID?.trim()
+  if (!taskId) return undefined
+  const control = (env.CONTROL_URL ?? 'http://control:8090').replace(/\/+$/, '')
+  const fetchImpl = globalThis.fetch as
+    | ((input: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; text(): Promise<string> }>)
+    | undefined
+  if (typeof fetchImpl !== 'function') return undefined
+  try {
+    const res = await fetchImpl(`${control}/tasks/${encodeURIComponent(taskId)}/memory`, {
+      signal: opts.signal,
+    })
+    const raw = await res.text()
+    if (!res.ok || !raw) return undefined
+    const body = JSON.parse(raw) as Record<string, unknown>
+    return [
+      'Shared task memory (injected on subagent/start):',
+      JSON.stringify({
+        insights: Array.isArray(body.insights) ? body.insights : [],
+        facts: Array.isArray(body.facts) ? body.facts : [],
+        todos: Array.isArray(body.todos) ? body.todos : [],
+        files: Array.isArray(body.files) ? body.files : [],
+      }),
+    ].join('\n')
+  } catch {
+    return undefined
+  }
+}
+
+async function injectIntoAgent(
+  localAgent: unknown,
+  blocks: Array<{ type: string; text: string }> | undefined,
+): Promise<void> {
+  if (!blocks?.length || !localAgent || typeof localAgent !== 'object') return
+  const agent = localAgent as { inject?: (payload: unknown) => unknown }
+  if (typeof agent.inject !== 'function') return
+  try {
+    await Promise.resolve(agent.inject(blocks))
+  } catch {
+    // best-effort; child still runs with start-request inject when supported
   }
 }
 

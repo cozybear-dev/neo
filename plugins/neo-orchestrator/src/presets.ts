@@ -182,7 +182,52 @@ export function assertJudgeAllowlist(preset: AgentPreset): void {
   }
 }
 
-export function catalogPrompt(presets: Map<string, AgentPreset>): string {
+export type OrchestrationMode = 'fast' | 'thorough'
+
+export function normalizeMode(mode?: string | null): OrchestrationMode {
+  return String(mode ?? '').trim().toLowerCase() === 'fast' ? 'fast' : 'thorough'
+}
+
+/** Mode machine as prompt + delegate policy (not a second orchestration loop). */
+export function buildModeMachinePrompt(mode: string = 'thorough'): string {
+  const active = normalizeMode(mode)
+  const header = [
+    'Mode machine (prompt + delegate policy; not a second orchestration loop).',
+    `Active mode: ${active}.`,
+    'Always confirm allowlist + authorization; call scope_check before delegate.',
+    'Pass mode, allowlist, denylist, secrets-by-reference, and /workspace paths to every child.',
+    'Task memory is injected into every child on subagent/start (agent.inject).',
+  ]
+
+  const fast = [
+    'Fast mode steps:',
+    '1. Skip clarify, planner, explore×3, /workspace/plan.md approval, swarm, judge, verifiers, and verification retries.',
+    '2. Delegate exactly one specialist (usually sandbox, recon, or pd-oss), then respond.',
+    '3. Issues may be filed as unverified.',
+  ]
+
+  const thorough = [
+    'Thorough mode steps:',
+    '1. Clarify scope with the user until targets and constraints are concrete.',
+    '2. Delegate planner; planner spawns explore×3 via parallel_group (optional browser for visual recon).',
+    '3. Planner writes /workspace/plan.md; use DSH plan mode for the approval gate before execution.',
+    '4. After approval, delegate swarm to decompose and run specialist workstreams.',
+    '5. Delegate judge; judge may only spawn ≤5 verifiers (parallel_group capped by max_parallel).',
+    '6. issue_create only for confirmed findings (never unverified in Thorough).',
+    '7. Write /workspace/report.md.',
+    '8. If judge returns needs retry: max 2 re-executions; write /workspace/verification/iteration-N.md each time.',
+  ]
+
+  if (active === 'fast') {
+    return [...header, ...fast, 'Thorough reference (skipped in Fast):', ...thorough.slice(1)].join('\n')
+  }
+  return [...header, ...thorough, 'Fast reference (not active):', ...fast.slice(1)].join('\n')
+}
+
+export function catalogPrompt(
+  presets: Map<string, AgentPreset>,
+  mode: string = process.env.NEO_MODE || 'thorough',
+): string {
   const rows = [...presets.values()]
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((p) => `- ${p.id} (max_parallel=${p.max_parallel}${p.readonly ? ', readonly' : ''}): ${p.when_to_use}`)
@@ -190,7 +235,7 @@ export function catalogPrompt(presets: Map<string, AgentPreset>): string {
   return [
     'You are the Neo orchestrator. Never pentest yourself. Always pass the authorized allowlist to children.',
     'Route by objective using the delegate tool. Prefer sandbox_exec over bash for scans.',
-    'Fast: one specialist, then respond. Thorough: planner (explore x3) → plan → swarm → judge → verifiers (≤5).',
+    buildModeMachinePrompt(mode),
     'After specialists, decide verify vs respond. Do not file issues until a verifier confirms in Thorough.',
     'Android/iOS fail closed without ANDROID_SERIAL / IOS_SSH_HOST; continue the swarm.',
     'Judge may only delegate to verifier. Planner/Explore must not issue_create or exploit.',

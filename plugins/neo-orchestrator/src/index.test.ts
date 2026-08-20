@@ -11,6 +11,7 @@ import {
 import {
   REQUIRED_PRESET_IDS,
   SPECIALIST_OUTPUT_SCHEMA,
+  buildModeMachinePrompt,
   catalogPrompt,
   failClosedReason,
   getPreset,
@@ -246,9 +247,13 @@ describe('delegate', () => {
 })
 
 describe('catalog prompt', () => {
-  it('lists every preset id', () => {
-    const text = catalogPrompt(presets)
+  it('lists every preset id and embeds the mode machine', () => {
+    const text = catalogPrompt(presets, 'thorough')
     assert.match(text, /Neo orchestrator/)
+    assert.match(text, /Mode machine/)
+    assert.match(text, /\/workspace\/plan\.md/)
+    assert.match(text, /iteration-N\.md/)
+    assert.equal(buildModeMachinePrompt('thorough').includes('≤5 verifiers'), true)
     for (const id of REQUIRED_PRESET_IDS) {
       assert.match(text, new RegExp(`- ${id} `))
     }
