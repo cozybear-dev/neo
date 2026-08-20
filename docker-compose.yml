@@ -119,6 +119,12 @@ services:
       postgres:
         condition: service_healthy
 
+  juice-shop:
+    image: bkimminich/juice-shop
+    profiles: [lab]
+    networks:
+      - targets
+
 volumes:
   workspace:
   pgdata:
