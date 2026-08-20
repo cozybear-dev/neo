@@ -41,6 +41,7 @@ COPY plugins/neo-tools-oast /opt/neo/plugins/neo-tools-oast
 COPY plugins/neo-sandbox-docker /opt/neo/plugins/neo-sandbox-docker
 COPY plugins/neo-tools-browser /opt/neo/plugins/neo-tools-browser
 COPY plugins/neo-tools-traffic /opt/neo/plugins/neo-tools-traffic
+COPY plugins/neo-tools-deploy /opt/neo/plugins/neo-tools-deploy
 COPY plugins/neo-summarizer /opt/neo/plugins/neo-summarizer
 COPY plugins/neo-orchestrator /opt/neo/plugins/neo-orchestrator
 COPY presets /opt/neo/presets

@@ -1,3 +1,6 @@
+include:
+  - path: docker-compose.ghidra.yml
+
 services:
   dsh:
     build:
@@ -125,5 +128,6 @@ networks:
   control:
     driver: bridge
   targets:
+    name: neo_targets
     driver: bridge
     internal: true

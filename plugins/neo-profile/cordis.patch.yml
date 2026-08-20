@@ -28,6 +28,8 @@
       name: neo-tools-browser
     - id: neo-tools-traffic
       name: neo-tools-traffic
+    - id: neo-tools-deploy
+      name: neo-tools-deploy
     - id: neo-summarizer
       name: neo-summarizer
     - id: neo-orchestrator

@@ -1,0 +1,26 @@
+# Optional GhidraMCP profile. Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.ghidra.yml --profile ghidra up -d ghidra
+# Or, if included from the main compose file:
+#   docker compose --profile ghidra up -d ghidra
+#
+# GhidraMCP HTTP API: ghidra:8080 (control network only; not published to the host).
+
+services:
+  ghidra:
+    profiles: ["ghidra"]
+    build:
+      context: ./docker/ghidra
+      dockerfile: Dockerfile
+    environment:
+      GHIDRA_MCP_PORT: "8080"
+    # MCP port is control-network only (not published to host).
+    expose:
+      - "8080"
+    volumes:
+      - workspace:/workspace
+      - ghidra-projects:/home/ghidra/projects
+    networks:
+      - control
+
+volumes:
+  ghidra-projects:
