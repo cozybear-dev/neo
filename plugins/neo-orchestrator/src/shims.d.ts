@@ -37,7 +37,10 @@ declare module '@deepseek-ai/dsh-tools' {
 
 declare module '@deepseek-ai/cordis' {
   export interface Context {
-    tools: { register: (tool: unknown) => void }
+    tools: {
+      register: (tool: unknown) => void
+      schemas?: (scope?: unknown) => Array<{ name?: string }>
+    }
     get(name: string): unknown
     subagents?: SubagentsLike
     systemPrompt?: {

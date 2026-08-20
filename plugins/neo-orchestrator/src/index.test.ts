@@ -211,6 +211,108 @@ describe('delegate', () => {
     assert.equal(result.results[0]!.next_agent, 'cve')
   })
 
+  it('keeps this on ctx.subagents.start (DSH SubagentRuntime.expectProvider)', async () => {
+    class FakeSubagentRuntime {
+      expectProvider(name: string) {
+        if (name !== 'spawn') throw new Error(`no subagent provider registered for "${name}"`)
+        return { name }
+      }
+
+      async start(name: string, request: Record<string, unknown>) {
+        this.expectProvider(name)
+        return {
+          id: 'child-1',
+          localAgent: { id: 'child-1' },
+          result: Promise.resolve({
+            stopReason: 'completed',
+            structured: {
+              summary: `planner saw: ${String(request.label ?? '')}`,
+              artifacts: [],
+              findings_claimed: [],
+              next_agent: '',
+              blockers: [],
+            },
+          }),
+          async dispose() {},
+        }
+      }
+    }
+
+    const result = await executeDelegate(
+      { agent_id: 'planner', prompt: 'write /workspace/plan.md' },
+      {
+        presets,
+        workspaceDir: workspace(),
+        parent: { id: 'orchestrator-session' },
+        subagents: new FakeSubagentRuntime(),
+      },
+    )
+    assert.equal(result.backend, 'spawn')
+    assert.equal(result.results[0]!.summary, 'planner saw: planner')
+  })
+
+  it('drops unknown global tools from toolFilter so restrict() can apply', async () => {
+    const known = new Set([
+      'delegate',
+      'glob',
+      'grep',
+      'memory_get',
+      'memory_update',
+      'read',
+      'skill',
+      'web_search',
+      'write',
+    ])
+    const planner = getPreset(presets, 'planner')
+    assert.ok(planner.tool_allowlist.includes('web_fetch'))
+    assert.ok(planner.tool_allowlist.includes('web_search'))
+
+    let seen: Record<string, unknown> | undefined
+    const result = await executeDelegate(
+      { agent_id: 'planner', prompt: 'write /workspace/plan.md' },
+      {
+        presets,
+        workspaceDir: workspace(),
+        parent: { id: 'orchestrator-session' },
+        knownGlobalTools: known,
+        subagents: {
+          async start(_name, request) {
+            seen = request
+            const allow = (request.toolFilter as { allow: string[] }).allow
+            for (const name of allow) {
+              if (!known.has(name)) {
+                throw new Error(
+                  `tools.restrict() names unknown global tool "${name}"; known global tools: ${[...known].sort().join(', ')}`,
+                )
+              }
+            }
+            return {
+              id: 'child-1',
+              localAgent: { id: 'child-1' },
+              result: Promise.resolve({
+                stopReason: 'completed',
+                structured: {
+                  summary: 'plan written',
+                  artifacts: ['/workspace/plan.md'],
+                  findings_claimed: [],
+                  next_agent: '',
+                  blockers: [],
+                },
+              }),
+              async dispose() {},
+            }
+          },
+        },
+      },
+    )
+
+    const allow = (seen?.toolFilter as { allow: string[] }).allow
+    assert.equal(allow.includes('web_fetch'), false)
+    assert.ok(allow.includes('web_search'))
+    assert.ok(allow.includes('write'))
+    assert.equal(result.results[0]!.summary, 'plan written')
+  })
+
   it('judge may only delegate to verifier', async () => {
     await assert.rejects(
       () => executeDelegate(

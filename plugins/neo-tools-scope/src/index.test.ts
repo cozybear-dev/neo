@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { checkScope, ScopeDeniedError, type FetchLike } from './client.ts'
+import { createTools } from './tools.ts'
+import { assertToolDefinitionCompiles, assertExecuteResultValid } from '../../../tests/helpers/dsh-schema.ts'
 
 function jsonFetch(
   handler: (url: string, init?: Parameters<FetchLike>[1]) => { status: number; body: unknown },
@@ -104,5 +106,22 @@ describe('scope_check', () => {
       { fetch: fetchImpl, env: { NEO_TASK_ID: 'from-env' } },
     )
     assert.equal((posted as { task_id: string }).task_id, 'from-env')
+  })
+
+  it('scope_check definition compiles and happy-path output matches schema', async () => {
+    const [tool] = createTools({
+      fetch: async () => ({
+        status: 200,
+        text: async () => JSON.stringify({ allowed: true, matched: 'juice-shop', reason: 'matched allowlist' }),
+      }),
+      env: {},
+    })
+    assert.equal(tool.name, 'scope_check')
+    assertToolDefinitionCompiles(tool)
+    const value = await tool.execute(
+      { target: 'juice-shop' },
+      { signal: new AbortController().signal },
+    )
+    assertExecuteResultValid(tool, value)
   })
 })

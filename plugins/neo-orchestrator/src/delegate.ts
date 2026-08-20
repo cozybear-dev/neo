@@ -65,6 +65,8 @@ export interface DelegateOptions {
   concurrency?: number
   now?: () => Date
   onSpawnedAgent?: (agent: unknown, agentId: string) => void
+  /** Host-registered global tool names. Unknown allowlist entries are dropped so tools.restrict() can apply. */
+  knownGlobalTools?: Iterable<string>
 }
 
 const DEFAULT_CONCURRENCY = 4
@@ -124,6 +126,18 @@ export function assertParallelGroupSize(
       )
     }
   }
+}
+
+/**
+ * DSH `tools.restrict({ allow })` throws on names that are not currently
+ * registered global tools (this host has `web_search` but not `web_fetch`).
+ * When the host catalog is known, drop those names; otherwise keep the yaml list.
+ */
+export function filterAllowlist(allow: readonly string[], known?: Iterable<string>): string[] {
+  if (known == null) return [...allow]
+  const set = known instanceof Set ? known : new Set(known)
+  if (set.size === 0) return [...allow]
+  return allow.filter((name) => set.has(name))
 }
 
 export function assertCallerPolicy(callerAgentId: string | undefined, children: Array<{ agent_id: string }>): void {
@@ -206,7 +220,7 @@ async function runSpawn(
   runId: string,
   opts: DelegateOptions,
 ): Promise<SpecialistResult> {
-  const start = opts.subagents!.start
+  const subagents = opts.subagents!
   const skillsNote = preset.skills.length > 0
     ? `\nActivate at most 3 skills from: ${preset.skills.join(', ')}.`
     : ''
@@ -221,13 +235,13 @@ async function runSpawn(
   const injectBlocks = memoryNote
     ? [{ type: 'text', text: memoryNote }]
     : undefined
-  const run = await start('spawn', {
+  const run = await subagents.start('spawn', {
     label: preset.id,
     prompt: [{ type: 'text', text: childPrompt }],
     parent: opts.parent,
     signal: opts.signal,
     persona: preset.persona,
-    toolFilter: { allow: preset.tool_allowlist },
+    toolFilter: { allow: filterAllowlist(preset.tool_allowlist, opts.knownGlobalTools) },
     outputSchema: SPECIALIST_OUTPUT_SCHEMA,
     agentOptions: { neoAgentId: preset.id },
     ...(injectBlocks ? { inject: injectBlocks } : {}),

@@ -1,78 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { renderSafe, replayTraffic, searchTraffic } from './client.js'
+import { createTools } from './tools.ts'
 
 export const name = 'neo-tools-traffic'
 export const inject = ['tools']
-
-const capturedRequest = {
-  type: 'object' as const,
-  additionalProperties: true,
-  properties: {
-    id: { type: 'string' as const, required: true },
-    method: { type: 'string' as const, required: true },
-    url: { type: 'string' as const, required: true },
-    headers: { type: 'object' as const, additionalProperties: { type: 'string' as const } },
-    postData: { type: 'string' as const },
-    status: { type: 'number' as const },
-    timestamp: { type: 'string' as const, required: true },
-  },
-}
+export { createTools } from './tools.ts'
 
 export function apply(ctx: Context): void {
-  ctx.tools.register(defineTool({
-    name: 'traffic_search',
-    description:
-      'Grep captured HTTP requests in /workspace/traffic/http.jsonl (method, URL, headers, body).',
-    parameters: {
-      query: { type: 'string', required: true, description: 'Case-insensitive substring over the JSONL records.' },
-    },
-    output: {
-      schema: { type: 'array', items: capturedRequest },
-      render: renderSafe,
-    },
-    async execute(args, exec) {
-      return searchTraffic(
-        { query: String(args.query ?? '') },
-        { signal: exec.signal },
-      )
-    },
-  }))
-
-  ctx.tools.register(defineTool({
-    name: 'traffic_replay',
-    description:
-      'Replay a captured request by id. Optional edits for method/headers/body/path. Destination host is pinned to the original (cannot change).',
-    parameters: {
-      id: { type: 'string', required: true, description: 'Captured request id.' },
-      edits: {
-        type: 'object',
-        additionalProperties: true,
-        description: 'Optional method, headers, body, or url (same host only).',
-      },
-    },
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          status: { type: 'number', required: true },
-          headers: { type: 'object', additionalProperties: { type: 'string' } },
-          body: { type: 'string', required: true },
-        },
-      },
-      render: renderSafe,
-    },
-    async execute(args, exec) {
-      return replayTraffic(
-        {
-          id: String(args.id ?? ''),
-          edits: args.edits && typeof args.edits === 'object' && !Array.isArray(args.edits)
-            ? args.edits as Record<string, unknown>
-            : undefined,
-        },
-        { signal: exec.signal },
-      )
-    },
-  }))
+  for (const def of createTools()) ctx.tools.register(defineTool(def))
 }
