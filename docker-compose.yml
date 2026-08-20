@@ -19,6 +19,10 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       PDCP_API_KEY: ${PDCP_API_KEY:-}
       HACKERONE_API_TOKEN: ${HACKERONE_API_TOKEN:-}
+      CONTROL_URL: ${CONTROL_URL:-http://control:8090}
+      NEO_TASK_ID: ${NEO_TASK_ID:-}
+      INTERACTSH_URL: ${INTERACTSH_URL:-http://interactsh:80}
+      INTERACTSH_TOKEN: ${INTERACTSH_TOKEN:-neo-oast}
     volumes:
       - dsh-home:/home/node/.dsh
       - workspace:/workspace
@@ -31,6 +35,8 @@ services:
         condition: service_healthy
       sandbox:
         condition: service_started
+      control:
+        condition: service_healthy
 
   sandbox:
     build:
@@ -58,7 +64,7 @@ services:
 
   interactsh:
     image: projectdiscovery/interactsh-server:latest
-    command: ["-auth", "-skip-acme"]
+    command: ["-auth", "-skip-acme", "-token", "${INTERACTSH_TOKEN:-neo-oast}"]
     networks:
       - control
 

@@ -14,6 +14,14 @@
       name: '@deepseek-ai/dsh-web-search-exa'
       config:
         apiKey: !!js process.env.EXA_API_KEY
+    - id: neo-tools-scope
+      name: neo-tools-scope
+    - id: neo-tools-memory
+      name: neo-tools-memory
+    - id: neo-tools-issues
+      name: neo-tools-issues
+    - id: neo-tools-oast
+      name: neo-tools-oast
 
 # Compose publishes :3080; the CLI flag --host 0.0.0.0 is refused, so the
 # webserver row binds all interfaces from this overlay instead.

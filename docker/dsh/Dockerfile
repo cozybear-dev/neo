@@ -34,10 +34,16 @@ RUN printf '%s\n' '#!/bin/sh' 'exec node /opt/dsh/apps/cli/lib/bin.js "$@"' > /u
   && chmod +x /usr/local/bin/dsh
 
 COPY plugins/neo-profile /opt/neo/plugins/neo-profile
+COPY plugins/neo-tools-scope /opt/neo/plugins/neo-tools-scope
+COPY plugins/neo-tools-memory /opt/neo/plugins/neo-tools-memory
+COPY plugins/neo-tools-issues /opt/neo/plugins/neo-tools-issues
+COPY plugins/neo-tools-oast /opt/neo/plugins/neo-tools-oast
 COPY docker/dsh/render-llm-settings.mjs /opt/neo/docker/dsh/render-llm-settings.mjs
 COPY docker/dsh/entrypoint.sh /opt/neo/docker/dsh/entrypoint.sh
-RUN chmod +x /opt/neo/docker/dsh/entrypoint.sh \
-  && chmod +r /opt/neo/docker/dsh/render-llm-settings.mjs
+COPY docker/dsh/build-plugins.sh /opt/neo/docker/dsh/build-plugins.sh
+RUN chmod +x /opt/neo/docker/dsh/entrypoint.sh /opt/neo/docker/dsh/build-plugins.sh \
+  && chmod +r /opt/neo/docker/dsh/render-llm-settings.mjs \
+  && /opt/neo/docker/dsh/build-plugins.sh
 
 ENV DSH_HOME=/home/node/.dsh \
     DSH_WEB_SEARCH_PROVIDER=exa \

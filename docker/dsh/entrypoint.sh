@@ -29,6 +29,13 @@ if [[ -d "${EXA_PKG}" ]]; then
   ln -sfn "${EXA_PKG}" "${DSH_HOME}/profiles/node_modules/@deepseek-ai/dsh-web-search-exa"
 fi
 
+for pkg in neo-tools-scope neo-tools-memory neo-tools-issues neo-tools-oast; do
+  if [[ -d "/opt/neo/plugins/${pkg}" ]]; then
+    ln -sfn "/opt/neo/plugins/${pkg}" "${DSH_HOME}/profiles/node_modules/${pkg}"
+  fi
+done
+export NODE_PATH="${DSH_HOME}/profiles/node_modules${NODE_PATH:+:$NODE_PATH}"
+
 # Operational equivalent of the neo profile's web.searchProvider patch.
 export DSH_WEB_SEARCH_PROVIDER="${DSH_WEB_SEARCH_PROVIDER:-exa}"
 

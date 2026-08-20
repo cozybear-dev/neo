@@ -1,0 +1,108 @@
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
+import { checkScope, ScopeDeniedError, type FetchLike } from './client.ts'
+
+function jsonFetch(
+  handler: (url: string, init?: Parameters<FetchLike>[1]) => { status: number; body: unknown },
+): FetchLike {
+  return async (url, init) => {
+    if (init?.signal?.aborted) {
+      const err = new Error('aborted')
+      err.name = 'AbortError'
+      throw err
+    }
+    const { status, body } = handler(url, init)
+    return { status, text: async () => JSON.stringify(body) }
+  }
+}
+
+describe('scope_check', () => {
+  it('throws on allowlist miss', async () => {
+    const fetchImpl = jsonFetch(() => ({
+      status: 200,
+      body: { allowed: false, matched: '', reason: 'default deny: no allowlist match' },
+    }))
+    await assert.rejects(
+      () => checkScope({ target: 'evil.example' }, { fetch: fetchImpl, env: {} }),
+      (err: unknown) => {
+        assert.ok(err instanceof ScopeDeniedError)
+        assert.match(err.message, /not in scope/)
+        assert.match(err.message, /default deny/)
+        assert.equal(err.result.allowed, false)
+        return true
+      },
+    )
+  })
+
+  it('returns allowlist hit', async () => {
+    const fetchImpl = jsonFetch(() => ({
+      status: 200,
+      body: { allowed: true, matched: 'juice-shop', reason: 'matched allowlist' },
+    }))
+    const result = await checkScope({ target: 'juice-shop' }, { fetch: fetchImpl, env: {} })
+    assert.deepEqual(result, {
+      allowed: true,
+      matched: 'juice-shop',
+      reason: 'matched allowlist',
+    })
+  })
+
+  it('posts extra_hosts and task_id, then checks each extra host', async () => {
+    const calls: Array<{ url: string; body: unknown; signal?: AbortSignal }> = []
+    const ac = new AbortController()
+    const fetchImpl = jsonFetch((url, init) => {
+      calls.push({
+        url,
+        body: init?.body ? JSON.parse(init.body) : null,
+        signal: init?.signal,
+      })
+      return {
+        status: 200,
+        body: { allowed: true, matched: '*.lab.internal', reason: 'matched allowlist' },
+      }
+    })
+    await checkScope(
+      { target: 'app.lab.internal', extra_hosts: ['api.lab.internal'], task_id: 'task-1' },
+      { fetch: fetchImpl, env: { CONTROL_URL: 'http://control:8090' }, signal: ac.signal },
+    )
+    assert.equal(calls.length, 2)
+    assert.equal(calls[0]?.url, 'http://control:8090/scope/check')
+    assert.deepEqual(calls[0]?.body, {
+      target: 'app.lab.internal',
+      extra_hosts: ['api.lab.internal'],
+      task_id: 'task-1',
+    })
+    assert.equal(calls[0]?.signal, ac.signal)
+    assert.deepEqual(calls[1]?.body, { target: 'api.lab.internal', task_id: 'task-1' })
+  })
+
+  it('throws when an extra host misses the allowlist', async () => {
+    const fetchImpl = jsonFetch((_url, init) => {
+      const body = init?.body ? JSON.parse(init.body) as { target: string } : { target: '' }
+      if (body.target === 'ok.lab.internal') {
+        return { status: 200, body: { allowed: true, matched: '*.lab.internal', reason: 'matched allowlist' } }
+      }
+      return { status: 200, body: { allowed: false, matched: '', reason: 'default deny: no allowlist match' } }
+    })
+    await assert.rejects(
+      () => checkScope(
+        { target: 'ok.lab.internal', extra_hosts: ['evil.example'] },
+        { fetch: fetchImpl, env: {} },
+      ),
+      /evil\.example/,
+    )
+  })
+
+  it('uses NEO_TASK_ID when task_id is omitted', async () => {
+    let posted: unknown
+    const fetchImpl = jsonFetch((_url, init) => {
+      posted = init?.body ? JSON.parse(init.body) : null
+      return { status: 200, body: { allowed: true, matched: 'localhost', reason: 'matched allowlist' } }
+    })
+    await checkScope(
+      { target: 'localhost' },
+      { fetch: fetchImpl, env: { NEO_TASK_ID: 'from-env' } },
+    )
+    assert.equal((posted as { task_id: string }).task_id, 'from-env')
+  })
+})
