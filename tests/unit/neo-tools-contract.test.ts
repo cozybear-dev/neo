@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assertToolDefinitionCompiles, assertExecuteResultValid } from '../helpers/dsh-schema.ts'
-import { NEO_TOOL_NAMES } from '../helpers/tool-catalog.ts'
+import { NEO_TOOL_NAMES, allNeoToolDefs } from '../helpers/tool-catalog.ts'
 import { createTools as scopeTools } from '../../plugins/neo-tools-scope/src/tools.ts'
 import { createTools as memoryTools } from '../../plugins/neo-tools-memory/src/tools.ts'
 import { createTools as issueTools } from '../../plugins/neo-tools-issues/src/tools.ts'
@@ -37,20 +37,6 @@ type ToolLike = {
 }
 
 const exec = { signal: new AbortController().signal }
-
-function allDefs() {
-  return [
-    ...scopeTools(),
-    ...memoryTools(),
-    ...issueTools(),
-    ...oastTools(),
-    ...sandboxTools(),
-    ...browserTools(),
-    ...trafficTools(),
-    ...deployTools(),
-    ...orchTools({ presets: undefined, workspaceDir: mkdtempSync(join(tmpdir(), 'neo-contract-')) }),
-  ]
-}
 
 function jsonFetch(handler: FetchHandler) {
   return async (url: string, init?: FetchInit) => {
@@ -131,7 +117,7 @@ function fakeBrowserSession(overrides: Record<string, unknown> = {}) {
 
 describe('Neo tool contract (pin 141eb6f)', () => {
   it('exports every catalog name exactly once and each definition compiles', () => {
-    const defs = allDefs()
+    const defs = allNeoToolDefs()
     const names = defs.map((d) => d.name).sort()
     assert.deepEqual(names, [...NEO_TOOL_NAMES].sort())
     for (const def of defs) assertToolDefinitionCompiles(def)

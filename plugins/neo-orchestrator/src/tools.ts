@@ -29,6 +29,9 @@ export type CreateToolsOptions = {
   env?: Record<string, string | undefined>
   subagents?: SubagentStart
   knownGlobalTools?: Iterable<string>
+  /** Called from execute, not createTools, so the live catalog includes `delegate`. */
+  getSubagents?: () => SubagentStart | undefined
+  getKnownGlobalTools?: () => Iterable<string> | undefined
 }
 
 const callerIds = new WeakMap<object, string>()
@@ -117,6 +120,10 @@ export function createTools(deps?: CreateToolsOptions): ToolDef[] {
       render,
     },
     async execute(args, exec) {
+      const subagents = options.getSubagents ? options.getSubagents() : options.subagents
+      const knownGlobalTools = options.getKnownGlobalTools
+        ? options.getKnownGlobalTools()
+        : options.knownGlobalTools
       return executeDelegate(args as DelegateArgs, {
         presets,
         workspaceDir,
@@ -124,8 +131,8 @@ export function createTools(deps?: CreateToolsOptions): ToolDef[] {
         signal: exec.signal,
         parent: exec.agent,
         callerAgentId: callerAgentId(exec),
-        subagents: options.subagents,
-        knownGlobalTools: options.knownGlobalTools,
+        subagents,
+        knownGlobalTools,
         onSpawnedAgent: (agent, id) => {
           if (agent && typeof agent === 'object') callerIds.set(agent, id)
         },

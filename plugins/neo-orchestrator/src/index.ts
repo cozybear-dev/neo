@@ -33,7 +33,7 @@ export {
 } from './delegate.js'
 
 function asSubagents(ctx: Context): SubagentStart | undefined {
-  const raw = (ctx.get('subagents') ?? ctx.subagents) as SubagentStart | undefined
+  const raw = ctx.get('subagents') as SubagentStart | undefined
   if (!raw || typeof raw.start !== 'function') return undefined
   return raw
 }
@@ -70,7 +70,7 @@ export function apply(ctx: Context): void {
     presets,
     workspaceDir,
     env: process.env,
-    subagents: asSubagents(ctx),
-    knownGlobalTools: listKnownGlobalTools(ctx),
+    getSubagents: () => asSubagents(ctx),
+    getKnownGlobalTools: () => listKnownGlobalTools(ctx),
   })) ctx.tools.register(defineTool(def))
 }

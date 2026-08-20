@@ -21,6 +21,7 @@ import {
   resolvePresetsDir,
   type AgentPreset,
 } from './presets.ts'
+import { createTools } from './tools.ts'
 
 const presets = loadPresetsFromDir(resolvePresetsDir())
 
@@ -314,6 +315,75 @@ describe('delegate', () => {
     assert.equal(result.results[0]!.summary, 'plan written')
   })
 
+  it('resolves knownGlobalTools at execute time so planner children keep delegate', async () => {
+    const names = [
+      'memory_get',
+      'memory_update',
+      'read',
+      'glob',
+      'grep',
+      'write',
+      'web_search',
+      'skill',
+    ]
+    const toolsApi = {
+      schemas: () => names.map((name) => ({ name })),
+    }
+    assert.equal(toolsApi.schemas().some((schema) => schema.name === 'delegate'), false)
+
+    let seen: Record<string, unknown> | undefined
+    const subagents = {
+      async start(_name: string, request: Record<string, unknown>) {
+        seen = request
+        return {
+          id: 'child-1',
+          localAgent: { id: 'child-1' },
+          result: Promise.resolve({
+            stopReason: 'completed',
+            structured: {
+              summary: 'plan written',
+              artifacts: ['/workspace/plan.md'],
+              findings_claimed: [],
+              next_agent: '',
+              blockers: [],
+            },
+          }),
+          async dispose() {},
+        }
+      },
+    }
+
+    const snapshotAtCreate = toolsApi.schemas()
+      .map((schema) => schema.name)
+      .filter((name): name is string => typeof name === 'string' && name.length > 0)
+
+    const [delegate] = createTools({
+      presets,
+      workspaceDir: workspace(),
+      env: {},
+      subagents,
+      knownGlobalTools: snapshotAtCreate,
+      getSubagents: () => subagents,
+      getKnownGlobalTools: () => toolsApi.schemas()
+        .map((schema) => schema.name)
+        .filter((name): name is string => typeof name === 'string' && name.length > 0),
+    })
+
+    names.push('delegate')
+
+    await delegate.execute(
+      { agent_id: 'planner', prompt: 'write /workspace/plan.md' },
+      { signal: new AbortController().signal, agent: { id: 'orchestrator-session' } },
+    )
+
+    const allow = (seen?.toolFilter as { allow: string[] } | undefined)?.allow
+    assert.ok(allow, 'expected spawn toolFilter')
+    assert.ok(
+      allow.includes('delegate'),
+      `planner toolFilter.allow missing delegate: ${allow.join(', ')}`,
+    )
+  })
+
   it('judge may only delegate to verifier', async () => {
     await assert.rejects(
       () => executeDelegate(
@@ -367,4 +437,10 @@ it('does not read ctx.systemPrompt (requires inject)', () => {
   const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
   assert.doesNotMatch(src, /ctx\.systemPrompt\b/)
   assert.match(src, /ctx\.get\(\s*['"]systemPrompt['"]\s*\)/)
+})
+
+it('does not read ctx.subagents (requires inject)', () => {
+  const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(src, /ctx\.subagents\b/)
+  assert.match(src, /ctx\.get\(\s*['"]subagents['"]\s*\)/)
 })
