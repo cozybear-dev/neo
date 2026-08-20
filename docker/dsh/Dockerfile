@@ -38,6 +38,9 @@ COPY plugins/neo-tools-scope /opt/neo/plugins/neo-tools-scope
 COPY plugins/neo-tools-memory /opt/neo/plugins/neo-tools-memory
 COPY plugins/neo-tools-issues /opt/neo/plugins/neo-tools-issues
 COPY plugins/neo-tools-oast /opt/neo/plugins/neo-tools-oast
+COPY plugins/neo-sandbox-docker /opt/neo/plugins/neo-sandbox-docker
+COPY plugins/neo-tools-browser /opt/neo/plugins/neo-tools-browser
+COPY plugins/neo-tools-traffic /opt/neo/plugins/neo-tools-traffic
 COPY docker/dsh/render-llm-settings.mjs /opt/neo/docker/dsh/render-llm-settings.mjs
 COPY docker/dsh/entrypoint.sh /opt/neo/docker/dsh/entrypoint.sh
 COPY docker/dsh/build-plugins.sh /opt/neo/docker/dsh/build-plugins.sh

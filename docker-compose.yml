@@ -23,9 +23,16 @@ services:
       NEO_TASK_ID: ${NEO_TASK_ID:-}
       INTERACTSH_URL: ${INTERACTSH_URL:-http://interactsh:80}
       INTERACTSH_TOKEN: ${INTERACTSH_TOKEN:-neo-oast}
+      SANDBOX_CONTAINER: ${SANDBOX_CONTAINER:-neo-sandbox-1}
+      BROWSER_CDP_URL: ${BROWSER_CDP_URL:-http://browser:9222}
+      DOCKER_HOST: ${DOCKER_HOST:-unix:///var/run/docker.sock}
     volumes:
       - dsh-home:/home/node/.dsh
       - workspace:/workspace
+      # docker exec into sandbox only; target-container create stays on sandbox.
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:-0}"
     ports:
       - "3080:3080"
     networks:
@@ -37,10 +44,13 @@ services:
         condition: service_started
       control:
         condition: service_healthy
+      browser:
+        condition: service_started
 
   sandbox:
     build:
       context: ./docker/sandbox
+    container_name: neo-sandbox-1
     volumes:
       - workspace:/workspace
       # Sandbox is the only service allowed to talk to the Docker socket,

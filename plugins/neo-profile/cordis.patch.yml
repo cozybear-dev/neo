@@ -22,6 +22,12 @@
       name: neo-tools-issues
     - id: neo-tools-oast
       name: neo-tools-oast
+    - id: neo-sandbox-docker
+      name: neo-sandbox-docker
+    - id: neo-tools-browser
+      name: neo-tools-browser
+    - id: neo-tools-traffic
+      name: neo-tools-traffic
 
 # Compose publishes :3080; the CLI flag --host 0.0.0.0 is refused, so the
 # webserver row binds all interfaces from this overlay instead.
