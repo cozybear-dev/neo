@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { getMemory, updateMemory, updateTask, type FetchLike } from './client.ts'
-import { ensureTaskId, taskIdFromSession } from './task.ts'
+import { ensureTaskId, resolveTaskId, taskIdFromSession } from './task.ts'
 import { createTools } from './tools.ts'
 
 function jsonFetch(
@@ -33,6 +33,20 @@ describe('taskIdFromSession', () => {
     assert.equal(
       taskIdFromSession('session-ef2b412d-84ac-4cde-8330-bdfd04154c78'),
       'ef2b412d-84ac-4cde-8330-bdfd04154c78',
+    )
+  })
+})
+
+describe('resolveTaskId', () => {
+  it('prefers agent.options.neoTaskId over the child session id', () => {
+    const parentTask = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    const childSession = 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78'
+    assert.equal(
+      resolveTaskId(undefined, {}, {
+        id: childSession,
+        options: { neoTaskId: parentTask },
+      }),
+      parentTask,
     )
   })
 })

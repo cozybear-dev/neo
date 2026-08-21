@@ -139,6 +139,29 @@ describe('control API (postgres)', { skip: !live }, () => {
     assert.equal(body.matched, 'juice-shop')
   })
 
+  it('POST /scope/check with unknown UUID still uses env allowlist', async () => {
+    const missing = randomUUID()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/scope/check',
+      payload: { target: 'juice-shop', task_id: missing },
+    })
+    assert.equal(res.statusCode, 200)
+    const body = res.json()
+    assert.equal(body.allowed, true)
+    assert.equal(body.matched, 'juice-shop')
+  })
+
+  it('POST /scope/check with invalid task_id format returns 400', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/scope/check',
+      payload: { target: 'juice-shop', task_id: 'not-a-uuid' },
+    })
+    assert.equal(res.statusCode, 400)
+    assert.match(res.json().error, /invalid task_id/)
+  })
+
   it('POST /scope/check merges task allowlist', async () => {
     const create = await app.inject({
       method: 'POST',

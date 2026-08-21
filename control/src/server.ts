@@ -501,11 +501,10 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance> 
         `SELECT allowlist, denylist FROM tasks WHERE id = $1`,
         [body.task_id],
       )
-      if (task.rowCount === 0) {
-        return reply.code(404).send({ error: 'task not found' })
+      if (task.rowCount !== 0) {
+        taskAllowlist = task.rows[0].allowlist
+        taskDenylist = task.rows[0].denylist
       }
-      taskAllowlist = task.rows[0].allowlist
-      taskDenylist = task.rows[0].denylist
     }
 
     return checkScope({

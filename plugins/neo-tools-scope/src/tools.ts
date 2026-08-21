@@ -1,4 +1,4 @@
-import { checkScope, type ClientOptions } from './client.ts'
+import { checkScope, type AgentRef, type ClientOptions } from './client.ts'
 
 export type ToolDef = {
   name: string
@@ -18,13 +18,10 @@ function render(_args: unknown, value: unknown): Array<{ type: 'text'; text: str
   return [{ type: 'text', text: JSON.stringify(value) }]
 }
 
-function agentOpt(exec: { agent?: unknown }): { id?: string } | undefined {
+function agentOpt(exec: { agent?: unknown }): AgentRef | undefined {
   const agent = exec.agent
-  if (agent && typeof agent === 'object' && 'id' in agent) {
-    const id = (agent as { id?: unknown }).id
-    if (typeof id === 'string') return { id }
-  }
-  return undefined
+  if (!agent || typeof agent !== 'object') return undefined
+  return agent as AgentRef
 }
 
 export function createTools(deps?: ClientOptions): ToolDef[] {

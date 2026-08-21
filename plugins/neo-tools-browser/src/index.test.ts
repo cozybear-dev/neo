@@ -8,6 +8,7 @@ import {
   browserScreenshot,
   connectCdp,
   connectPlaywright,
+  resolveTaskId,
   rewriteCdpWebSocketUrl,
   ScopeDeniedError,
   type BrowserSession,
@@ -123,6 +124,39 @@ describe('browser_navigate', () => {
       task_id: 'ef2b412d-84ac-4cde-8330-bdfd04154c78',
     })
     assert.equal(session.calls[0], 'goto:http://juice-shop.lab.internal/:networkidle')
+  })
+
+  it('resolveTaskId prefers agent.options.neoTaskId over the child session id', () => {
+    const parentTask = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    assert.equal(
+      resolveTaskId(undefined, {}, {
+        id: 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78',
+        options: { neoTaskId: parentTask },
+      }),
+      parentTask,
+    )
+  })
+
+  it('posts agent.options.neoTaskId rather than the child session UUID', async () => {
+    const session = fakeSession()
+    const scopeCalls: Array<{ url: string; body: unknown }> = []
+    const parentTask = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    await browserNavigate(
+      { url: 'http://juice-shop.lab.internal/' },
+      {
+        session,
+        fetch: allowFetch({ calls: scopeCalls }),
+        env: { CONTROL_URL: 'http://control:8090' },
+        agent: {
+          id: 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78',
+          options: { neoTaskId: parentTask },
+        },
+      },
+    )
+    assert.deepEqual(scopeCalls[0]?.body, {
+      target: 'juice-shop.lab.internal',
+      task_id: parentTask,
+    })
   })
 
   it('throws on allowlist miss and does not navigate', async () => {

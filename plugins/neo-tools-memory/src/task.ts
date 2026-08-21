@@ -22,6 +22,35 @@ export function taskIdFromSession(sessionId: string | undefined): string | undef
   return m ? m[0].toLowerCase() : undefined
 }
 
+export type AgentRef = {
+  id?: string
+  options?: { neoTaskId?: unknown }
+  parent?: { id?: string; options?: { neoTaskId?: unknown } }
+  parentSession?: { id?: string }
+}
+
+export function resolveTaskId(
+  arg: string | undefined,
+  env: EnvMap = process.env,
+  agent?: AgentRef,
+): string | undefined {
+  const parent = agent?.parent
+  const parentOption = typeof parent?.options?.neoTaskId === 'string'
+    ? parent.options.neoTaskId
+    : undefined
+  const option = typeof agent?.options?.neoTaskId === 'string' ? agent.options.neoTaskId : undefined
+  const candidates = [
+    arg,
+    env.NEO_TASK_ID,
+    option,
+    parentOption,
+    taskIdFromSession(parent?.id),
+    taskIdFromSession(agent?.parentSession?.id),
+    taskIdFromSession(agent?.id),
+  ]
+  return candidates.map((v) => v?.trim()).find((v) => v && UUID_RE.test(v))
+}
+
 function parseAllowlistEnv(raw: string | undefined): string[] {
   if (!raw) return []
   return raw
@@ -57,13 +86,12 @@ async function readJson(
 export async function ensureTaskId(opts: {
   arg?: string
   env?: EnvMap
-  agent?: { id?: string }
+  agent?: AgentRef
   fetch: FetchLike
   signal?: AbortSignal
 }): Promise<string> {
   const env = opts.env ?? process.env
-  const candidates = [opts.arg, env.NEO_TASK_ID, taskIdFromSession(opts.agent?.id)]
-  const id = candidates.map((v) => v?.trim()).find((v) => v && UUID_RE.test(v))
+  const id = resolveTaskId(opts.arg, env, opts.agent)
   if (!id) throw new Error('task_id is required (set NEO_TASK_ID or pass task_id)')
 
   const base = controlBase(env)

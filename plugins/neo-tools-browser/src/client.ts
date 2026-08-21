@@ -94,7 +94,7 @@ export type ClientOptions = {
   now?: () => Date
   randomId?: () => string
   skipScopeCheck?: boolean
-  agent?: { id?: string }
+  agent?: AgentRef
 }
 
 export const DEFAULT_CDP_URL = 'http://browser:9222'
@@ -177,14 +177,38 @@ const UUID_RE =
 const UUID_EXTRACT_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
 
+export type AgentRef = {
+  id?: string
+  options?: { neoTaskId?: unknown }
+  parent?: { id?: string; options?: { neoTaskId?: unknown } }
+  parentSession?: { id?: string }
+}
+
 function taskIdFromSession(sessionId: string | undefined): string | undefined {
   if (!sessionId) return undefined
   const m = sessionId.match(UUID_EXTRACT_RE)
   return m ? m[0].toLowerCase() : undefined
 }
 
-function resolveScopeTaskId(env: EnvMap, agent?: { id?: string }): string | undefined {
-  const candidates = [env.NEO_TASK_ID, taskIdFromSession(agent?.id)]
+export function resolveTaskId(
+  arg: string | undefined,
+  env: EnvMap = process.env,
+  agent?: AgentRef,
+): string | undefined {
+  const parent = agent?.parent
+  const parentOption = typeof parent?.options?.neoTaskId === 'string'
+    ? parent.options.neoTaskId
+    : undefined
+  const option = typeof agent?.options?.neoTaskId === 'string' ? agent.options.neoTaskId : undefined
+  const candidates = [
+    arg,
+    env.NEO_TASK_ID,
+    option,
+    parentOption,
+    taskIdFromSession(parent?.id),
+    taskIdFromSession(agent?.parentSession?.id),
+    taskIdFromSession(agent?.id),
+  ]
   return candidates.map((v) => v?.trim()).find((v) => v && UUID_RE.test(v))
 }
 
@@ -193,7 +217,7 @@ export async function assertInScope(target: string, opts: ClientOptions = {}): P
   const env = opts.env ?? process.env
   const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
   const control = (env.CONTROL_URL ?? 'http://control:8090').replace(/\/+$/, '')
-  const taskId = resolveScopeTaskId(env, opts.agent)
+  const taskId = resolveTaskId(undefined, env, opts.agent)
   const host = normalizeScopeHost(target)
   const payload: Record<string, unknown> = { target: host }
   if (taskId) payload.task_id = taskId

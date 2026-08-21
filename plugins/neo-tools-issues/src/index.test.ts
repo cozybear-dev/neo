@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { createIssue, queryIssues, updateIssue, type FetchLike } from './client.ts'
+import { createIssue, queryIssues, resolveTaskId, updateIssue, type FetchLike } from './client.ts'
 
 function jsonFetch(
   handler: (url: string, init?: Parameters<FetchLike>[1]) => { status: number; body: unknown },
@@ -97,6 +97,17 @@ describe('issue_query / issue_update', () => {
     )
     assert.deepEqual(result, { ok: true })
     assert.deepEqual(posted, { status: 'false_positive', comment: 'nope' })
+  })
+
+  it('resolveTaskId prefers agent.options.neoTaskId over the child session id', () => {
+    const parentTask = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    assert.equal(
+      resolveTaskId(undefined, {}, {
+        id: 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78',
+        options: { neoTaskId: parentTask },
+      }),
+      parentTask,
+    )
   })
 
   it('omits non-uuid task_id and falls back to session UUID', async () => {

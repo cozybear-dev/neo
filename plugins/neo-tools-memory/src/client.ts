@@ -1,4 +1,4 @@
-import { ensureTaskId } from './task.ts'
+import { ensureTaskId, type AgentRef } from './task.ts'
 
 export type FetchLike = (
   input: string,
@@ -18,7 +18,7 @@ export type ClientOptions = {
   fetch?: FetchLike
   env?: EnvMap
   signal?: AbortSignal
-  agent?: { id?: string }
+  agent?: AgentRef
 }
 
 export type MemorySnapshot = {

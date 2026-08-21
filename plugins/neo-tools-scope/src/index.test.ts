@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { checkScope, ScopeDeniedError, type FetchLike } from './client.ts'
+import { checkScope, resolveTaskId, ScopeDeniedError, type FetchLike } from './client.ts'
 import { normalizeScopeHost } from './host.ts'
 import { createTools } from './tools.ts'
 import { assertToolDefinitionCompiles, assertExecuteResultValid } from '../../../tests/helpers/dsh-schema.ts'
@@ -130,6 +130,43 @@ describe('scope_check', () => {
       { fetch: fetchImpl, env: { NEO_TASK_ID: envTask } },
     )
     assert.equal((posted as { task_id: string }).task_id, envTask)
+  })
+
+  it('prefers agent.options.neoTaskId over the child session id', async () => {
+    let posted: unknown
+    const fetchImpl = jsonFetch((_url, init) => {
+      posted = init?.body ? JSON.parse(init.body) : null
+      return { status: 200, body: { allowed: true, matched: 'localhost', reason: 'matched allowlist' } }
+    })
+    const parentTask = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    await checkScope(
+      { target: 'localhost' },
+      {
+        fetch: fetchImpl,
+        env: {},
+        agent: {
+          id: 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78',
+          options: { neoTaskId: parentTask },
+        },
+      },
+    )
+    assert.equal((posted as { task_id: string }).task_id, parentTask)
+  })
+
+  it('resolveTaskId prefers agent.options.neoTaskId over the child session id', () => {
+    const parentTask = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    const childSession = 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78'
+    assert.equal(
+      resolveTaskId(undefined, {}, {
+        id: childSession,
+        options: { neoTaskId: parentTask },
+      }),
+      parentTask,
+    )
+    assert.equal(
+      resolveTaskId(undefined, {}, { id: childSession }),
+      'ef2b412d-84ac-4cde-8330-bdfd04154c78',
+    )
   })
 
   it('omits non-uuid task_id and uses session-derived UUID', async () => {

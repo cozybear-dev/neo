@@ -5,8 +5,10 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import {
   CHILD_ARTIFACT_MKDIR_OPTS,
+  DSH_AGENT_PLANE_TOOLS,
   assertParallelGroupSize,
   executeDelegate,
+  listKnownGlobalTools,
   resolveChildren,
 } from './delegate.ts'
 import {
@@ -228,6 +230,50 @@ describe('delegate', () => {
     assert.equal(opts.model, undefined)
     assert.equal(result.results[0]!.summary, 'notes written')
     assert.equal(result.results[0]!.next_agent, 'cve')
+  })
+
+  it('spawn request includes agentOptions.neoTaskId from the parent session id', async () => {
+    const parentId = 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78'
+    let seen: Record<string, unknown> | undefined
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      throw new Error('offline')
+    }) as typeof fetch
+    try {
+      await executeDelegate(
+        { agent_id: 'research', prompt: 'map the stack' },
+        {
+          presets,
+          workspaceDir: workspace(),
+          parent: { id: parentId },
+          subagents: {
+            async start(_name, request) {
+              seen = request
+              return {
+                id: 'child-1',
+                localAgent: { id: 'child-1' },
+                result: Promise.resolve({
+                  stopReason: 'completed',
+                  structured: {
+                    summary: 'ok',
+                    artifacts: [],
+                    findings_claimed: [],
+                    next_agent: '',
+                    blockers: [],
+                  },
+                }),
+                async dispose() {},
+              }
+            },
+          },
+        },
+      )
+    } finally {
+      globalThis.fetch = origFetch
+    }
+    const opts = seen?.agentOptions as { neoAgentId?: string; neoTaskId?: string }
+    assert.equal(opts.neoAgentId, 'research')
+    assert.equal(opts.neoTaskId, 'ef2b412d-84ac-4cde-8330-bdfd04154c78')
   })
 
   it('keeps this on ctx.subagents.start (DSH SubagentRuntime.expectProvider)', async () => {
@@ -517,4 +563,20 @@ it('does not read ctx.subagents (requires inject)', () => {
   const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
   assert.doesNotMatch(src, /ctx\.subagents\b/)
   assert.match(src, /ctx\.get\(\s*['"]subagents['"]\s*\)/)
+})
+
+describe('listKnownGlobalTools', () => {
+  it('keeps global schemas when schemas(parent) throws', () => {
+    const schemas = (scope?: unknown) => {
+      if (scope != null) throw new Error('parent catalog failed')
+      return [{ name: 'scope_check' }, { name: 'memory_get' }]
+    }
+    const names = listKnownGlobalTools({ schemas }, { id: 'parent' })
+    assert.ok(names)
+    assert.ok(names.includes('scope_check'))
+    assert.ok(names.includes('memory_get'))
+    for (const name of DSH_AGENT_PLANE_TOOLS) {
+      assert.ok(names.includes(name), `missing agent-plane tool ${name}`)
+    }
+  })
 })

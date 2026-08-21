@@ -16,7 +16,7 @@ export type ClientOptions = {
   fetch?: FetchLike
   env?: EnvMap
   signal?: AbortSignal
-  agent?: { id?: string }
+  agent?: AgentRef
 }
 
 export type Issue = {
@@ -48,6 +48,13 @@ export function taskIdFromSession(sessionId: string | undefined): string | undef
   return m ? m[0].toLowerCase() : undefined
 }
 
+export type AgentRef = {
+  id?: string
+  options?: { neoTaskId?: unknown }
+  parent?: { id?: string; options?: { neoTaskId?: unknown } }
+  parentSession?: { id?: string }
+}
+
 export function controlUrl(env: EnvMap = process.env): string {
   return (env.CONTROL_URL ?? 'http://control:8090').replace(/\/+$/, '')
 }
@@ -55,9 +62,22 @@ export function controlUrl(env: EnvMap = process.env): string {
 export function resolveTaskId(
   arg: string | undefined,
   env: EnvMap = process.env,
-  agent?: { id?: string },
+  agent?: AgentRef,
 ): string | undefined {
-  const candidates = [arg, env.NEO_TASK_ID, taskIdFromSession(agent?.id)]
+  const parent = agent?.parent
+  const parentOption = typeof parent?.options?.neoTaskId === 'string'
+    ? parent.options.neoTaskId
+    : undefined
+  const option = typeof agent?.options?.neoTaskId === 'string' ? agent.options.neoTaskId : undefined
+  const candidates = [
+    arg,
+    env.NEO_TASK_ID,
+    option,
+    parentOption,
+    taskIdFromSession(parent?.id),
+    taskIdFromSession(agent?.parentSession?.id),
+    taskIdFromSession(agent?.id),
+  ]
   return candidates.map((v) => v?.trim()).find((v) => v && UUID_RE.test(v))
 }
 

@@ -85,6 +85,35 @@ export const DSH_AGENT_PLANE_TOOLS = [
   'bash', 'read', 'write', 'edit', 'glob', 'grep', 'skill', 'web_search',
 ] as const
 
+/**
+ * Parent-visible + global schemas, unioned with agent-plane builtins.
+ * `schemas(parent)` failure still runs `schemas()` so plugin tools are not stripped.
+ */
+export function listKnownGlobalTools(
+  tools: { schemas?: (scope?: unknown) => Array<{ name?: string }> } | undefined,
+  parent?: unknown,
+): string[] | undefined {
+  if (!tools || typeof tools.schemas !== 'function') return undefined
+  let fromParent: Array<{ name?: string }> = []
+  if (parent != null) {
+    try {
+      fromParent = tools.schemas(parent) ?? []
+    } catch {
+      fromParent = []
+    }
+  }
+  let fromGlobal: Array<{ name?: string }> = []
+  try {
+    fromGlobal = tools.schemas() ?? []
+  } catch {
+    fromGlobal = []
+  }
+  const names = [...fromParent, ...fromGlobal]
+    .map((schema) => schema?.name)
+    .filter((name): name is string => typeof name === 'string' && name.length > 0)
+  return [...new Set([...names, ...DSH_AGENT_PLANE_TOOLS])]
+}
+
 export function parseParallelGroup(raw: unknown): ParallelChild[] | undefined {
   if (raw == null) return undefined
   if (!Array.isArray(raw)) {
@@ -258,6 +287,7 @@ async function runSpawn(
   const injectBlocks = memoryNote
     ? [{ type: 'text', text: memoryNote }]
     : undefined
+  const neoTaskId = neoTaskIdForChild(opts)
   const run = await subagents.start('spawn', {
     label: preset.id,
     prompt: [{ type: 'text', text: childPrompt }],
@@ -272,7 +302,10 @@ async function runSpawn(
       ),
     },
     outputSchema: SPECIALIST_OUTPUT_SCHEMA,
-    agentOptions: { neoAgentId: preset.id },
+    agentOptions: {
+      neoAgentId: preset.id,
+      ...(neoTaskId ? { neoTaskId } : {}),
+    },
     ...(injectBlocks ? { inject: injectBlocks } : {}),
   })
   try {
@@ -306,14 +339,22 @@ function taskIdFromSession(sessionId: string | undefined): string | undefined {
   return m ? m[0].toLowerCase() : undefined
 }
 
-async function formatTaskMemoryInject(opts: DelegateOptions): Promise<string | undefined> {
+function neoTaskIdForChild(opts: DelegateOptions): string | undefined {
   const env = opts.env ?? process.env
   const parent = opts.parent && typeof opts.parent === 'object'
-    ? opts.parent as { id?: unknown }
+    ? opts.parent as { id?: unknown; options?: { neoTaskId?: unknown } }
+    : undefined
+  const fromOptions = typeof parent?.options?.neoTaskId === 'string'
+    ? parent.options.neoTaskId.trim()
     : undefined
   const parentId = typeof parent?.id === 'string' ? parent.id : undefined
-  const candidates = [env.NEO_TASK_ID?.trim(), taskIdFromSession(parentId)]
-  const taskId = candidates.find((v) => v && UUID_RE.test(v))
+  const candidates = [fromOptions, env.NEO_TASK_ID?.trim(), taskIdFromSession(parentId)]
+  return candidates.find((v) => v && UUID_RE.test(v))
+}
+
+async function formatTaskMemoryInject(opts: DelegateOptions): Promise<string | undefined> {
+  const env = opts.env ?? process.env
+  const taskId = neoTaskIdForChild(opts)
   if (!taskId) return undefined
   const control = (env.CONTROL_URL ?? 'http://control:8090').replace(/\/+$/, '')
   const fetchImpl = globalThis.fetch as
