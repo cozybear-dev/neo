@@ -18,6 +18,15 @@ function render(_args: unknown, value: unknown): Array<{ type: 'text'; text: str
   return [{ type: 'text', text: JSON.stringify(value) }]
 }
 
+function agentOpt(exec: { agent?: unknown }): { id?: string } | undefined {
+  const agent = exec.agent
+  if (agent && typeof agent === 'object' && 'id' in agent) {
+    const id = (agent as { id?: unknown }).id
+    if (typeof id === 'string') return { id }
+  }
+  return undefined
+}
+
 const issueObject = {
   type: 'object' as const,
   additionalProperties: true,
@@ -94,7 +103,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
             verdict: typeof args.verdict === 'string' ? args.verdict : undefined,
             task_id: typeof args.task_id === 'string' ? args.task_id : undefined,
           },
-          { ...options, signal: exec.signal },
+          { ...options, signal: exec.signal, agent: agentOpt(exec) },
         )
       },
     },
@@ -105,7 +114,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         host: { type: 'string' },
         severity: { type: 'string' },
         status: { type: 'string' },
-        task_id: { type: 'string', description: 'Task id; defaults to NEO_TASK_ID.' },
+        task_id: { type: 'string', description: 'Task id; defaults to NEO_TASK_ID or session UUID.' },
       },
       output: {
         schema: { type: 'array', items: issueObject },
@@ -119,7 +128,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
             status: typeof args.status === 'string' ? args.status : undefined,
             task_id: typeof args.task_id === 'string' ? args.task_id : undefined,
           },
-          { ...options, signal: exec.signal },
+          { ...options, signal: exec.signal, agent: agentOpt(exec) },
         )
       },
     },
@@ -148,7 +157,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
             status: typeof args.status === 'string' ? args.status : undefined,
             comment: typeof args.comment === 'string' ? args.comment : undefined,
           },
-          { ...options, signal: exec.signal },
+          { ...options, signal: exec.signal, agent: agentOpt(exec) },
         )
       },
     },

@@ -18,6 +18,15 @@ function render(_args: unknown, value: unknown): Array<{ type: 'text'; text: str
   return [{ type: 'text', text: JSON.stringify(value) }]
 }
 
+function agentOpt(exec: { agent?: unknown }): { id?: string } | undefined {
+  const agent = exec.agent
+  if (agent && typeof agent === 'object' && 'id' in agent) {
+    const id = (agent as { id?: unknown }).id
+    if (typeof id === 'string') return { id }
+  }
+  return undefined
+}
+
 export function createTools(deps?: ClientOptions): ToolDef[] {
   const options = deps ?? {}
   return [{
@@ -31,7 +40,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         items: { type: 'string' },
         description: 'Additional hosts that must also be in scope (e.g. Host header aliases).',
       },
-      task_id: { type: 'string', description: 'Task id; defaults to NEO_TASK_ID.' },
+      task_id: { type: 'string', description: 'Task id; defaults to NEO_TASK_ID or session UUID.' },
     },
     output: {
       schema: {
@@ -54,7 +63,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
             : undefined,
           task_id: typeof args.task_id === 'string' ? args.task_id : undefined,
         },
-        { ...options, signal: exec.signal },
+        { ...options, signal: exec.signal, agent: agentOpt(exec) },
       )
     },
   }]

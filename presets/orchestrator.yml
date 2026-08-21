@@ -23,6 +23,7 @@ tool_allowlist:
   - scope_check
   - memory_get
   - memory_update
+  - task_update
   - issue_query
   - read
   - glob

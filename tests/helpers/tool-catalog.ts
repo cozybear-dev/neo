@@ -12,7 +12,7 @@ import { createTools as deployTools } from '../../plugins/neo-tools-deploy/src/t
 import { createTools as orchTools } from '../../plugins/neo-orchestrator/src/tools.ts'
 
 export const NEO_TOOL_NAMES = [
-  'scope_check', 'memory_get', 'memory_update',
+  'scope_check', 'memory_get', 'memory_update', 'task_update',
   'issue_create', 'issue_query', 'issue_update',
   'oast_register', 'oast_poll',
   'sandbox_exec',

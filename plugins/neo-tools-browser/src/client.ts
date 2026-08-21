@@ -94,6 +94,7 @@ export type ClientOptions = {
   now?: () => Date
   randomId?: () => string
   skipScopeCheck?: boolean
+  agent?: { id?: string }
 }
 
 export const DEFAULT_CDP_URL = 'http://browser:9222'
@@ -170,15 +171,32 @@ export class ScopeDeniedError extends Error {
   }
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+const UUID_EXTRACT_RE =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
+
+function taskIdFromSession(sessionId: string | undefined): string | undefined {
+  if (!sessionId) return undefined
+  const m = sessionId.match(UUID_EXTRACT_RE)
+  return m ? m[0].toLowerCase() : undefined
+}
+
+function resolveScopeTaskId(env: EnvMap, agent?: { id?: string }): string | undefined {
+  const candidates = [env.NEO_TASK_ID, taskIdFromSession(agent?.id)]
+  return candidates.map((v) => v?.trim()).find((v) => v && UUID_RE.test(v))
+}
+
 export async function assertInScope(target: string, opts: ClientOptions = {}): Promise<void> {
   if (opts.skipScopeCheck) return
   const env = opts.env ?? process.env
   const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
   const control = (env.CONTROL_URL ?? 'http://control:8090').replace(/\/+$/, '')
-  const taskId = env.NEO_TASK_ID
+  const taskId = resolveScopeTaskId(env, opts.agent)
   const host = normalizeScopeHost(target)
   const payload: Record<string, unknown> = { target: host }
-  if (taskId && taskId.trim()) payload.task_id = taskId.trim()
+  if (taskId) payload.task_id = taskId
   const res = await fetchImpl(`${control}/scope/check`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

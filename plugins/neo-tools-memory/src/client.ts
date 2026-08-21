@@ -1,3 +1,5 @@
+import { ensureTaskId } from './task.ts'
+
 export type FetchLike = (
   input: string,
   init?: {
@@ -16,6 +18,7 @@ export type ClientOptions = {
   fetch?: FetchLike
   env?: EnvMap
   signal?: AbortSignal
+  agent?: { id?: string }
 }
 
 export type MemorySnapshot = {
@@ -27,14 +30,6 @@ export type MemorySnapshot = {
 
 export function controlUrl(env: EnvMap = process.env): string {
   return (env.CONTROL_URL ?? 'http://control:8090').replace(/\/+$/, '')
-}
-
-export function resolveTaskId(arg: string | undefined, env: EnvMap = process.env): string {
-  const value = arg ?? env.NEO_TASK_ID
-  if (!value || !value.trim()) {
-    throw new Error('task_id is required (set NEO_TASK_ID or pass task_id)')
-  }
-  return value.trim()
 }
 
 async function readJson(
@@ -67,13 +62,26 @@ function asMemory(body: unknown): MemorySnapshot {
   }
 }
 
+function errorMessage(body: unknown, fallback: string): string {
+  if (body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string') {
+    return (body as { error: string }).error
+  }
+  return fallback
+}
+
 export async function getMemory(
   args: { task_id?: string } = {},
   opts: ClientOptions = {},
 ): Promise<MemorySnapshot> {
   const env = opts.env ?? process.env
   const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
-  const id = resolveTaskId(args.task_id ?? opts.taskId, env)
+  const id = await ensureTaskId({
+    arg: args.task_id ?? opts.taskId,
+    env,
+    agent: opts.agent,
+    fetch: fetchImpl,
+    signal: opts.signal,
+  })
   const { status, body } = await readJson(fetchImpl, `${controlUrl(env)}/tasks/${id}/memory`, {
     method: 'GET',
     signal: opts.signal,
@@ -97,7 +105,13 @@ export async function updateMemory(
 ): Promise<{ ok: true }> {
   const env = opts.env ?? process.env
   const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
-  const id = resolveTaskId(args.task_id ?? opts.taskId, env)
+  const id = await ensureTaskId({
+    arg: args.task_id ?? opts.taskId,
+    env,
+    agent: opts.agent,
+    fetch: fetchImpl,
+    signal: opts.signal,
+  })
   const payload: Record<string, unknown> = {}
   if (Array.isArray(args.insights)) payload.insights = args.insights
   if (Array.isArray(args.facts)) payload.facts = args.facts
@@ -113,6 +127,43 @@ export async function updateMemory(
   if (status < 200 || status >= 300) {
     const err = body && typeof body === 'object' ? (body as { error?: unknown }).error : undefined
     throw new Error(`memory_update failed (${status}): ${typeof err === 'string' ? err : 'http error'}`)
+  }
+  return { ok: true }
+}
+
+export async function updateTask(
+  args: {
+    task_id?: string
+    allowlist?: string[]
+    denylist?: string[]
+    status?: string
+    objective?: string
+  },
+  opts: ClientOptions = {},
+): Promise<{ ok: true }> {
+  const env = opts.env ?? process.env
+  const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
+  const id = await ensureTaskId({
+    arg: args.task_id ?? opts.taskId,
+    env,
+    agent: opts.agent,
+    fetch: fetchImpl,
+    signal: opts.signal,
+  })
+  const payload: Record<string, unknown> = {}
+  if (Array.isArray(args.allowlist)) payload.allowlist = args.allowlist
+  if (Array.isArray(args.denylist)) payload.denylist = args.denylist
+  if (typeof args.status === 'string') payload.status = args.status
+  if (typeof args.objective === 'string') payload.objective = args.objective
+
+  const { status, body } = await readJson(fetchImpl, `${controlUrl(env)}/tasks/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: opts.signal,
+  })
+  if (status < 200 || status >= 300) {
+    throw new Error(`task_update failed (${status}): ${errorMessage(body, 'http error')}`)
   }
   return { ok: true }
 }

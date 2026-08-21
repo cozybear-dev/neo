@@ -387,4 +387,50 @@ describe('control API (postgres)', { skip: !live }, () => {
     assert.equal(rejected.statusCode, 400)
     assert.match(rejected.json().error, /verdict=confirmed/)
   })
+
+  it('GET /issues with a non-uuid task_id returns 400 not 500', async () => {
+    const res = await app.inject({ method: 'GET', url: '/issues?task_id=session-ef2b412d-nope' })
+    assert.equal(res.statusCode, 400)
+    assert.match(res.json().error, /invalid task_id/)
+  })
+
+  it('PATCH /tasks/:id replaces allowlist', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/tasks',
+      payload: {
+        mode: 'thorough',
+        objective: 'session',
+        allowlist: ['huntandhackett.com'],
+      },
+    })
+    assert.equal(create.statusCode, 201)
+    const taskId = create.json().id as string
+
+    const patched = await app.inject({
+      method: 'PATCH',
+      url: `/tasks/${taskId}`,
+      payload: { allowlist: ['huntandhackett.com', '*.huntandhackett.com'] },
+    })
+    assert.equal(patched.statusCode, 200)
+    assert.deepEqual(patched.json().allowlist, ['huntandhackett.com', '*.huntandhackett.com'])
+  })
+
+  it('GET /tasks/:id returns task or 404', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/tasks',
+      payload: { mode: 'fast', objective: 'get-one', allowlist: ['localhost'] },
+    })
+    const taskId = create.json().id as string
+    const got = await app.inject({ method: 'GET', url: `/tasks/${taskId}` })
+    assert.equal(got.statusCode, 200)
+    assert.equal(got.json().id, taskId)
+
+    const missing = await app.inject({
+      method: 'GET',
+      url: `/tasks/${randomUUID()}`,
+    })
+    assert.equal(missing.statusCode, 404)
+  })
 })

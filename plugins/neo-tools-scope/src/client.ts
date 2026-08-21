@@ -18,6 +18,7 @@ export type ClientOptions = {
   fetch?: FetchLike
   env?: EnvMap
   signal?: AbortSignal
+  agent?: { id?: string }
 }
 
 export type ScopeCheckResult = {
@@ -35,13 +36,29 @@ export class ScopeDeniedError extends Error {
   }
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+const UUID_EXTRACT_RE =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
+
+export function taskIdFromSession(sessionId: string | undefined): string | undefined {
+  if (!sessionId) return undefined
+  const m = sessionId.match(UUID_EXTRACT_RE)
+  return m ? m[0].toLowerCase() : undefined
+}
+
 export function controlUrl(env: EnvMap = process.env): string {
   return (env.CONTROL_URL ?? 'http://control:8090').replace(/\/+$/, '')
 }
 
-export function resolveTaskId(arg: string | undefined, env: EnvMap = process.env): string | undefined {
-  const value = arg ?? env.NEO_TASK_ID
-  return value && value.trim() ? value.trim() : undefined
+export function resolveTaskId(
+  arg: string | undefined,
+  env: EnvMap = process.env,
+  agent?: { id?: string },
+): string | undefined {
+  const candidates = [arg, env.NEO_TASK_ID, taskIdFromSession(agent?.id)]
+  return candidates.map((v) => v?.trim()).find((v) => v && UUID_RE.test(v))
 }
 
 async function readJson(
@@ -80,7 +97,7 @@ async function checkOne(
 ): Promise<ScopeCheckResult> {
   const env = opts.env ?? process.env
   const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
-  const taskId = resolveTaskId(opts.taskId, env)
+  const taskId = resolveTaskId(opts.taskId, env, opts.agent)
   const payload: Record<string, unknown> = { target }
   if (extraHosts && extraHosts.length > 0) payload.extra_hosts = extraHosts
   if (taskId) payload.task_id = taskId

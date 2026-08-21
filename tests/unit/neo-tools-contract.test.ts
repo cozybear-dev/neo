@@ -157,21 +157,33 @@ describe('Neo tool contract (pin 141eb6f)', () => {
       todos: [{ text: 't1' }],
       files: ['a.txt'],
     }
+    const taskId = 'ef2b412d-84ac-4cde-8330-bdfd04154c78'
     const memory = byName(memoryTools({
-      fetch: jsonFetch(() => ({ status: 200, body: snapshot })),
+      fetch: jsonFetch((url, init) => {
+        if (!url.includes('/memory') && (init?.method ?? 'GET') === 'GET') {
+          return { status: 200, body: { id: taskId } }
+        }
+        return { status: 200, body: snapshot }
+      }),
       env: {},
     }), 'memory_get')
-    const value = await memory.execute({ task_id: 'task-uuid' }, exec)
+    const value = await memory.execute({ task_id: taskId }, exec)
     assert.deepEqual(value, snapshot)
     assertExecuteResultValid(memory, value)
   })
 
   it('memory_update 200 returns { ok: true }', async () => {
+    const taskId = 'ef2b412d-84ac-4cde-8330-bdfd04154c78'
     const memory = byName(memoryTools({
-      fetch: jsonFetch(() => ({ status: 200, body: { ok: true } })),
+      fetch: jsonFetch((url, init) => {
+        if (!url.includes('/memory') && (init?.method ?? 'GET') === 'GET') {
+          return { status: 200, body: { id: taskId } }
+        }
+        return { status: 200, body: { ok: true } }
+      }),
       env: {},
     }), 'memory_update')
-    const value = await memory.execute({ insights: ['i2'], task_id: 'task-uuid' }, exec)
+    const value = await memory.execute({ insights: ['i2'], task_id: taskId }, exec)
     assert.deepEqual(value, { ok: true })
     assertExecuteResultValid(memory, value)
   })

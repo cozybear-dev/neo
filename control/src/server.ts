@@ -47,6 +47,13 @@ export type PatchIssueBody = {
   verdict?: string
 }
 
+export type PatchTaskBody = {
+  allowlist?: string[]
+  denylist?: string[]
+  status?: string
+  objective?: string
+}
+
 export type AppOptions = {
   databaseUrl?: string
   allowlistEnv?: string
@@ -161,6 +168,67 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance> 
       denylist,
       status,
     })
+  })
+
+  app.get<{ Params: { id: string } }>('/tasks/:id', async (req, reply) => {
+    const { id } = req.params
+    if (!isUuid(id)) return reply.code(400).send({ error: 'invalid task id' })
+
+    const task = await pool.query(
+      `SELECT id, mode, objective, allowlist, denylist, status, created_at
+       FROM tasks WHERE id = $1`,
+      [id],
+    )
+    if (task.rowCount === 0) return reply.code(404).send({ error: 'task not found' })
+    return task.rows[0]
+  })
+
+  app.patch<{ Params: { id: string }; Body: PatchTaskBody }>('/tasks/:id', async (req, reply) => {
+    const { id } = req.params
+    if (!isUuid(id)) return reply.code(400).send({ error: 'invalid task id' })
+
+    const existing = await pool.query(
+      `SELECT id, mode, objective, allowlist, denylist, status, created_at FROM tasks WHERE id = $1`,
+      [id],
+    )
+    if (existing.rowCount === 0) return reply.code(404).send({ error: 'task not found' })
+
+    const body = req.body ?? {}
+    const row = existing.rows[0]
+    if (body.allowlist !== undefined && !Array.isArray(body.allowlist)) {
+      return reply.code(400).send({ error: 'allowlist must be an array' })
+    }
+    if (body.denylist !== undefined && !Array.isArray(body.denylist)) {
+      return reply.code(400).send({ error: 'denylist must be an array' })
+    }
+    if (body.objective !== undefined && (typeof body.objective !== 'string' || !body.objective.trim())) {
+      return reply.code(400).send({ error: 'objective must be a non-empty string' })
+    }
+    if (body.status !== undefined && (typeof body.status !== 'string' || !body.status)) {
+      return reply.code(400).send({ error: 'status must be a non-empty string' })
+    }
+
+    const next = {
+      allowlist: Array.isArray(body.allowlist) ? body.allowlist : row.allowlist,
+      denylist: Array.isArray(body.denylist) ? body.denylist : row.denylist,
+      status: typeof body.status === 'string' && body.status ? body.status : row.status,
+      objective:
+        typeof body.objective === 'string' && body.objective.trim()
+          ? body.objective
+          : row.objective,
+    }
+
+    const updated = await pool.query(
+      `UPDATE tasks SET
+         allowlist = $2,
+         denylist = $3,
+         status = $4,
+         objective = $5
+       WHERE id = $1
+       RETURNING id, mode, objective, allowlist, denylist, status, created_at`,
+      [id, next.allowlist, next.denylist, next.status, next.objective],
+    )
+    return updated.rows[0]
   })
 
   app.get<{ Params: { id: string } }>('/tasks/:id/memory', async (req, reply) => {
@@ -321,8 +389,11 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance> 
 
   app.get<{
     Querystring: { host?: string; severity?: string; status?: string; task_id?: string }
-  }>('/issues', async (req) => {
+  }>('/issues', async (req, reply) => {
     const { host, severity, status, task_id } = req.query
+    if (task_id && !isUuid(task_id)) {
+      return reply.code(400).send({ error: 'invalid task_id' })
+    }
     const clauses: string[] = []
     const params: unknown[] = []
 

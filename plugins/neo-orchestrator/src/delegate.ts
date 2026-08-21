@@ -291,9 +291,26 @@ async function runSpawn(
   }
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+const UUID_EXTRACT_RE =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
+
+function taskIdFromSession(sessionId: string | undefined): string | undefined {
+  if (!sessionId) return undefined
+  const m = sessionId.match(UUID_EXTRACT_RE)
+  return m ? m[0].toLowerCase() : undefined
+}
+
 async function formatTaskMemoryInject(opts: DelegateOptions): Promise<string | undefined> {
   const env = opts.env ?? process.env
-  const taskId = env.NEO_TASK_ID?.trim()
+  const parent = opts.parent && typeof opts.parent === 'object'
+    ? opts.parent as { id?: unknown }
+    : undefined
+  const parentId = typeof parent?.id === 'string' ? parent.id : undefined
+  const candidates = [env.NEO_TASK_ID?.trim(), taskIdFromSession(parentId)]
+  const taskId = candidates.find((v) => v && UUID_RE.test(v))
   if (!taskId) return undefined
   const control = (env.CONTROL_URL ?? 'http://control:8090').replace(/\/+$/, '')
   const fetchImpl = globalThis.fetch as

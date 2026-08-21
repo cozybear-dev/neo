@@ -85,8 +85,9 @@ describe('scope_check', () => {
         body: { allowed: true, matched: '*.lab.internal', reason: 'matched allowlist' },
       }
     })
+    const taskId = 'ef2b412d-84ac-4cde-8330-bdfd04154c78'
     await checkScope(
-      { target: 'app.lab.internal', extra_hosts: ['api.lab.internal'], task_id: 'task-1' },
+      { target: 'app.lab.internal', extra_hosts: ['api.lab.internal'], task_id: taskId },
       { fetch: fetchImpl, env: { CONTROL_URL: 'http://control:8090' }, signal: ac.signal },
     )
     assert.equal(calls.length, 2)
@@ -94,10 +95,10 @@ describe('scope_check', () => {
     assert.deepEqual(calls[0]?.body, {
       target: 'app.lab.internal',
       extra_hosts: ['api.lab.internal'],
-      task_id: 'task-1',
+      task_id: taskId,
     })
     assert.equal(calls[0]?.signal, ac.signal)
-    assert.deepEqual(calls[1]?.body, { target: 'api.lab.internal', task_id: 'task-1' })
+    assert.deepEqual(calls[1]?.body, { target: 'api.lab.internal', task_id: taskId })
   })
 
   it('throws when an extra host misses the allowlist', async () => {
@@ -123,11 +124,29 @@ describe('scope_check', () => {
       posted = init?.body ? JSON.parse(init.body) : null
       return { status: 200, body: { allowed: true, matched: 'localhost', reason: 'matched allowlist' } }
     })
+    const envTask = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
     await checkScope(
       { target: 'localhost' },
-      { fetch: fetchImpl, env: { NEO_TASK_ID: 'from-env' } },
+      { fetch: fetchImpl, env: { NEO_TASK_ID: envTask } },
     )
-    assert.equal((posted as { task_id: string }).task_id, 'from-env')
+    assert.equal((posted as { task_id: string }).task_id, envTask)
+  })
+
+  it('omits non-uuid task_id and uses session-derived UUID', async () => {
+    let posted: unknown
+    const fetchImpl = jsonFetch((_url, init) => {
+      posted = init?.body ? JSON.parse(init.body) : null
+      return { status: 200, body: { allowed: true, matched: 'localhost', reason: 'matched allowlist' } }
+    })
+    await checkScope(
+      { target: 'localhost', task_id: 'session-not-a-uuid' },
+      {
+        fetch: fetchImpl,
+        env: {},
+        agent: { id: 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78' },
+      },
+    )
+    assert.equal((posted as { task_id: string }).task_id, 'ef2b412d-84ac-4cde-8330-bdfd04154c78')
   })
 
   it('normalizes URL targets to hostname before POST', async () => {

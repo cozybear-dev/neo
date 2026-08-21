@@ -98,4 +98,22 @@ describe('issue_query / issue_update', () => {
     assert.deepEqual(result, { ok: true })
     assert.deepEqual(posted, { status: 'false_positive', comment: 'nope' })
   })
+
+  it('omits non-uuid task_id and falls back to session UUID', async () => {
+    let url = ''
+    const fetchImpl = jsonFetch((u) => {
+      url = u
+      return { status: 200, body: { issues: [] } }
+    })
+    await queryIssues(
+      { task_id: 'session-ef2b412d-nope' },
+      {
+        fetch: fetchImpl,
+        env: {},
+        agent: { id: 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78' },
+      },
+    )
+    assert.match(url, /task_id=ef2b412d-84ac-4cde-8330-bdfd04154c78/)
+    assert.doesNotMatch(url, /session-ef2b412d-nope/)
+  })
 })
