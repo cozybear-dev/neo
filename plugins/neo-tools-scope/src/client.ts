@@ -1,3 +1,5 @@
+import { normalizeScopeHost } from './host.ts'
+
 export type FetchLike = (
   input: string,
   init?: {
@@ -102,12 +104,14 @@ export async function checkScope(
   args: { target: string; extra_hosts?: string[]; task_id?: string },
   opts: ClientOptions = {},
 ): Promise<ScopeCheckResult> {
-  const target = args.target.trim()
+  const target = normalizeScopeHost(args.target)
   if (!target) {
     throw new ScopeDeniedError(args.target, { allowed: false, matched: '', reason: 'empty target' })
   }
 
-  const extra = (args.extra_hosts ?? []).map((h) => h.trim()).filter(Boolean)
+  const extra = (args.extra_hosts ?? [])
+    .map((h) => normalizeScopeHost(h))
+    .filter(Boolean)
   const merged: ClientOptions = { ...opts, taskId: args.task_id ?? opts.taskId }
   const primary = await checkOne(target, extra.length ? extra : undefined, merged)
   if (!primary.allowed) throw new ScopeDeniedError(target, primary)

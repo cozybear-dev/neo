@@ -114,7 +114,7 @@ describe('browser_navigate', () => {
     )
     assert.deepEqual(result, { url: 'http://juice-shop.lab.internal/', title: 'Juice Shop' })
     assert.equal(scopeCalls[0]?.url, 'http://control:8090/scope/check')
-    assert.deepEqual(scopeCalls[0]?.body, { target: 'http://juice-shop.lab.internal/', task_id: 'task-1' })
+    assert.deepEqual(scopeCalls[0]?.body, { target: 'juice-shop.lab.internal', task_id: 'task-1' })
     assert.equal(session.calls[0], 'goto:http://juice-shop.lab.internal/:networkidle')
   })
 

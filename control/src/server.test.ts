@@ -63,6 +63,31 @@ describe('scope matching (unit)', () => {
     assert.equal(matchPattern(['juice-shop'], 'juice-shop'), 'juice-shop')
     assert.equal(matchPattern(['juice-shop'], 'other'), null)
   })
+
+  it('matches URL targets against hostname allowlist', () => {
+    const result = checkScope({
+      target: 'https://huntandhackett.com/path?q=1',
+      envAllowlist: ['huntandhackett.com'],
+    })
+    assert.equal(result.allowed, true)
+    assert.equal(result.matched, 'huntandhackett.com')
+  })
+
+  it('does not let example.com allow www.example.com', () => {
+    const result = checkScope({
+      target: 'https://www.huntandhackett.com',
+      envAllowlist: ['huntandhackett.com'],
+    })
+    assert.equal(result.allowed, false)
+  })
+
+  it('lets *.example.com match apex', () => {
+    const result = checkScope({
+      target: 'huntandhackett.com',
+      envAllowlist: ['*.huntandhackett.com'],
+    })
+    assert.equal(result.allowed, true)
+  })
 })
 
 const live = await canReachPostgres()

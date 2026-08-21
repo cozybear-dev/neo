@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir, writeFile } from 'node:fs/promises'
+import { normalizeScopeHost } from './host.ts'
 
 export type EnvMap = Record<string, string | undefined>
 
@@ -175,7 +176,8 @@ export async function assertInScope(target: string, opts: ClientOptions = {}): P
   const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
   const control = (env.CONTROL_URL ?? 'http://control:8090').replace(/\/+$/, '')
   const taskId = env.NEO_TASK_ID
-  const payload: Record<string, unknown> = { target }
+  const host = normalizeScopeHost(target)
+  const payload: Record<string, unknown> = { target: host }
   if (taskId && taskId.trim()) payload.task_id = taskId.trim()
   const res = await fetchImpl(`${control}/scope/check`, {
     method: 'POST',
@@ -194,10 +196,9 @@ export async function assertInScope(target: string, opts: ClientOptions = {}): P
     throw new Error(`scope check failed (${res.status}): ${body.reason ?? 'http error'}`)
   }
   if (body.allowed !== true) {
-    throw new ScopeDeniedError(target, body.reason ?? 'default deny')
+    throw new ScopeDeniedError(host || target, body.reason ?? 'default deny')
   }
 }
-
 function recordCapture(opts: ClientOptions, store: CapturedRequest[], partial: Omit<CapturedRequest, 'id' | 'timestamp'>): CapturedRequest {
   const rec: CapturedRequest = {
     id: (opts.randomId ?? randomUUID)(),

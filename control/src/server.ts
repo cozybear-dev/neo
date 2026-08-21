@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url'
 import Fastify, { type FastifyInstance } from 'fastify'
 import picomatch from 'picomatch'
 import { createPool, migrate, type Db } from './db.js'
+import { normalizeScopeHost } from './host.js'
 
 export type MemoryBody = {
   insights?: unknown[]
@@ -65,6 +66,10 @@ export function matchPattern(patterns: string[], target: string): string | null 
     if (picomatch.isMatch(target, pattern, { nocase: true, dot: true })) {
       return pattern
     }
+    // *.example.com also matches apex example.com
+    if (pattern.startsWith('*.') && target.toLowerCase() === pattern.slice(2).toLowerCase()) {
+      return pattern
+    }
   }
   return null
 }
@@ -75,7 +80,7 @@ export function checkScope(input: {
   taskAllowlist?: string[]
   taskDenylist?: string[]
 }): { allowed: boolean; matched: string; reason: string } {
-  const target = input.target.trim()
+  const target = normalizeScopeHost(input.target)
   if (!target) {
     return { allowed: false, matched: '', reason: 'empty target' }
   }

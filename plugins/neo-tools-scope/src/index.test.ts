@@ -1,8 +1,30 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { checkScope, ScopeDeniedError, type FetchLike } from './client.ts'
+import { normalizeScopeHost } from './host.ts'
 import { createTools } from './tools.ts'
 import { assertToolDefinitionCompiles, assertExecuteResultValid } from '../../../tests/helpers/dsh-schema.ts'
+
+describe('normalizeScopeHost', () => {
+  it('extracts hostname from absolute URLs', () => {
+    assert.equal(normalizeScopeHost('https://x.com/a'), 'x.com')
+  })
+
+  it('strips brackets from IPv6 and ports from host:port', () => {
+    assert.equal(normalizeScopeHost('[2001:db8::1]:8443'), '2001:db8::1')
+    assert.equal(normalizeScopeHost('example.com:8080'), 'example.com')
+  })
+
+  it('returns empty for blank input', () => {
+    assert.equal(normalizeScopeHost(''), '')
+    assert.equal(normalizeScopeHost('   '), '')
+  })
+
+  it('does not parse javascript: as a network host', () => {
+    // No :// so URL hostname path is not used; fallback is the scheme token only.
+    assert.equal(normalizeScopeHost('javascript:alert(1)'), 'javascript')
+  })
+})
 
 function jsonFetch(
   handler: (url: string, init?: Parameters<FetchLike>[1]) => { status: number; body: unknown },
@@ -106,6 +128,19 @@ describe('scope_check', () => {
       { fetch: fetchImpl, env: { NEO_TASK_ID: 'from-env' } },
     )
     assert.equal((posted as { task_id: string }).task_id, 'from-env')
+  })
+
+  it('normalizes URL targets to hostname before POST', async () => {
+    let posted: unknown
+    const fetchImpl = jsonFetch((_url, init) => {
+      posted = init?.body ? JSON.parse(init.body) : null
+      return { status: 200, body: { allowed: true, matched: 'x.com', reason: 'matched allowlist' } }
+    })
+    await checkScope(
+      { target: 'https://x.com/path?q=1' },
+      { fetch: fetchImpl, env: {} },
+    )
+    assert.equal((posted as { target: string }).target, 'x.com')
   })
 
   it('scope_check definition compiles and happy-path output matches schema', async () => {
