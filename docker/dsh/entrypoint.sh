@@ -79,4 +79,13 @@ if [[ "$#" -eq 0 ]]; then
   set -- dsh --profile neo --no-open
 fi
 
+# Named volume mounts wipe image ownership; keep /workspace writable for USER neo.
+mkdir -p /workspace
+chmod 1777 /workspace || true
+# Pre-create specialist dirs so neo can write even if umask is strict.
+for d in agents explore recon research sandbox browser verification; do
+  mkdir -p "/workspace/${d}"
+  chmod 1777 "/workspace/${d}" || true
+done
+
 exec "$@"

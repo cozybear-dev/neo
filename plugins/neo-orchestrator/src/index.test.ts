@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import {
+  CHILD_ARTIFACT_MKDIR_OPTS,
   assertParallelGroupSize,
   executeDelegate,
   resolveChildren,
@@ -150,6 +151,18 @@ describe('delegate', () => {
     }
     const files = readdirSync(join(dir, 'agents', 'explore'))
     assert.equal(files.length, 3)
+  })
+
+  it('creates child artifact dirs world-writable', async () => {
+    const dir = workspace()
+    await executeDelegate({ agent_id: 'explore', prompt: 'x' }, { presets, workspaceDir: dir })
+    const st = statSync(join(dir, 'agents', 'explore'))
+    assert.ok(st.isDirectory())
+    // Production always passes mode 0o777; NTFS does not surface POSIX other-write bits.
+    assert.equal(CHILD_ARTIFACT_MKDIR_OPTS.mode, 0o777)
+    if (process.platform !== 'win32') {
+      assert.equal(st.mode & 0o077, 0o077)
+    }
   })
 
   it('fail-closes android/ios without hardware env', async () => {

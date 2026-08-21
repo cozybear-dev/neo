@@ -30,4 +30,14 @@ describe('DSH permission mode in the compose stack', () => {
       /process\.env\.DSH_PERMISSION_MODE \?\? 'danger-full-access'/,
     )
   })
+
+  it('makes /workspace sticky-world-writable for sandbox user neo', () => {
+    const entrypoint = read('docker/dsh/entrypoint.sh')
+    assert.match(entrypoint, /chmod 1777 \/workspace/)
+    assert.match(
+      entrypoint,
+      /for d in agents explore recon research sandbox browser verification/,
+    )
+    assert.match(entrypoint, /chmod 1777 "\/workspace\/\$\{d\}"/)
+  })
 })

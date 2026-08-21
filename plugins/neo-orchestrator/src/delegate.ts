@@ -8,6 +8,9 @@ import {
   PresetError,
 } from './presets.ts'
 
+/** World-writable so sandbox USER neo can write under DSH-created agent dirs. */
+export const CHILD_ARTIFACT_MKDIR_OPTS = { recursive: true, mode: 0o777 } as const
+
 export interface ParallelChild {
   agent_id?: string
   prompt?: string
@@ -376,7 +379,7 @@ function writeChildOutput(
   workspaceDir: string,
 ): ChildRunResult {
   const dir = join(workspaceDir, 'agents', preset.id)
-  mkdirSync(dir, { recursive: true })
+  mkdirSync(dir, { ...CHILD_ARTIFACT_MKDIR_OPTS })
   const artifactPath = join(dir, `${runId}.json`).replace(/\\/g, '/')
   const artifacts = structured.artifacts.includes(artifactPath)
     ? structured.artifacts

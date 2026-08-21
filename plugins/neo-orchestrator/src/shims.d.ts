@@ -6,7 +6,7 @@ declare const process: {
 declare module 'node:fs' {
   export function readdirSync(path: string): string[]
   export function readFileSync(path: string, enc: string): string
-  export function mkdirSync(path: string, opts?: { recursive?: boolean }): void
+  export function mkdirSync(path: string, opts?: { recursive?: boolean; mode?: number }): void
   export function writeFileSync(path: string, data: string, enc?: string): void
 }
 
