@@ -3,7 +3,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createTools } from './tools.ts'
 import { DSH_AGENT_PLANE_TOOLS, type SubagentStart } from './delegate.ts'
 import {
-  catalogPrompt,
+  catalogSectionText,
   loadPresetsFromDir,
   resolvePresetsDir,
 } from './presets.ts'
@@ -20,6 +20,8 @@ export {
   resolvePresetsDir,
   getPreset,
   catalogPrompt,
+  catalogSectionText,
+  isSpecialistScope,
   buildModeMachinePrompt,
   normalizeMode,
 } from './presets.js'
@@ -66,7 +68,7 @@ export function apply(ctx: Context): void {
     promptApi.section({
       name: 'neo:orchestrator',
       order: 50,
-      text: () => catalogPrompt(presets, process.env.NEO_MODE || 'thorough'),
+      text: (context) => catalogSectionText(context, presets, process.env.NEO_MODE || 'thorough'),
     })
   }
 

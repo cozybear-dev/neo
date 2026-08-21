@@ -14,6 +14,7 @@ import {
   SPECIALIST_OUTPUT_SCHEMA,
   buildModeMachinePrompt,
   catalogPrompt,
+  catalogSectionText,
   failClosedReason,
   getPreset,
   loadPresetsFromDir,
@@ -486,6 +487,23 @@ describe('catalog prompt', () => {
     for (const id of REQUIRED_PRESET_IDS) {
       assert.match(text, new RegExp(`- ${id} `))
     }
+  })
+
+  it('catalogPrompt is empty for specialist scopes', () => {
+    const text = catalogSectionText({
+      scope: { options: { neoAgentId: 'research' }, label: 'research' },
+    })
+    assert.equal(text, '')
+  })
+
+  it('catalogPrompt still renders for the root agent', () => {
+    const text = catalogSectionText({ scope: { id: 'session-…' } })
+    assert.match(text, /You are the Neo orchestrator/)
+  })
+
+  it('thorough mode machine does not mention exit_plan_mode or plan mode', () => {
+    assert.equal(/plan mode|exit_plan_mode/i.test(buildModeMachinePrompt('thorough')), false)
+    assert.match(buildModeMachinePrompt('thorough'), /ask_user_question/)
   })
 })
 

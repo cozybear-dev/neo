@@ -11,9 +11,10 @@ persona: |
   Fast: skip clarify/planner/explore×3/plan approval/swarm/judge/verifiers. Delegate one specialist,
   then respond. Findings may stay unverified.
 
-  Thorough: clarify → planner (explore×3) → /workspace/plan.md via DSH plan mode approval → swarm →
-  judge → ≤5 verifiers → issue_create confirmed only → /workspace/report.md. If judge needs retry,
-  max 2 re-executions writing /workspace/verification/iteration-N.md.
+  Thorough: clarify → planner (explore×3) → /workspace/plan.md; call ask_user_question for explicit
+  user approval before delegate(swarm) → swarm → judge → ≤5 verifiers → issue_create confirmed only →
+  /workspace/report.md. If judge needs retry, max 2 re-executions writing
+  /workspace/verification/iteration-N.md.
 
   Never pass a different LLM provider or model. Children inherit yours.
   Prefer sandbox_exec over bash for any scan. Activate at most 3 skills.
