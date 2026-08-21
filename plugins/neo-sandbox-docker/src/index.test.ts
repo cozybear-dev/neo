@@ -105,7 +105,7 @@ describe('execInSandbox', () => {
     })
     assert.equal(command, 'docker')
     assert.deepEqual(args, [
-      'exec', '-w', '/workspace', '-e', 'FOO=bar', 'neo-sandbox-1', 'bash', '-lc', 'echo hi',
+      'exec', '-u', 'neo', '-w', '/workspace', '-e', 'FOO=bar', 'neo-sandbox-1', 'bash', '-lc', 'echo hi',
     ])
   })
 
@@ -123,7 +123,9 @@ describe('execInSandbox', () => {
     assert.equal(result.exitCode, 0)
     assert.equal(got?.command, 'docker')
     assert.equal(got?.args[0], 'exec')
-    assert.equal(got?.args[2], '/workspace')
+    assert.ok(got?.args.includes('-u') && got?.args.includes('neo'))
+    const w = got?.args.indexOf('-w') ?? -1
+    assert.equal(got?.args[w + 1], '/workspace')
     assert.ok(got?.args.includes('sandbox'))
     assert.equal(got?.signal, ac.signal)
   })
@@ -149,8 +151,13 @@ describe('docker engine HTTP', () => {
     const result = await execInSandbox({ command: 'echo hello' }, { docker, env: {} })
     assert.deepEqual(result, { stdout: 'hello\n', stderr: '', exitCode: 0 })
     assert.match(calls[0]!.path, /\/containers\/neo-sandbox-1\/exec/)
-    const created = JSON.parse(calls[0]!.body ?? '{}') as { WorkingDir: string; Cmd: string[] }
+    const created = JSON.parse(calls[0]!.body ?? '{}') as {
+      WorkingDir: string
+      Cmd: string[]
+      User?: string
+    }
     assert.equal(created.WorkingDir, '/workspace')
+    assert.equal(created.User, 'neo')
     assert.deepEqual(created.Cmd, ['bash', '-lc', 'echo hello'])
   })
 

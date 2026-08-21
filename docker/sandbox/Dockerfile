@@ -86,7 +86,12 @@ RUN id neo >/dev/null 2>&1 || useradd -m -s /bin/bash neo \
     && chown -R neo:neo /workspace /opt/wordlists /home/neo
 
 WORKDIR /workspace
-USER neo
 
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Entrypoint runs as root to chmod the volume, then drops to neo via runuser.
+USER root
+ENTRYPOINT ["/entrypoint.sh"]
 # Keep the container alive under Compose; agents docker-exec into it later.
 CMD ["sleep", "infinity"]

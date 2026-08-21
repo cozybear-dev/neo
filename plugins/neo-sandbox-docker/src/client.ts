@@ -91,7 +91,8 @@ export function dockerExecArgs(
   container: string,
   spec: DockerExecSpec,
 ): { command: string; args: string[] } {
-  const args = ['exec', '-w', spec.cwd]
+  // Image USER is root so entrypoint can chmod the volume; exec still as neo.
+  const args = ['exec', '-u', 'neo', '-w', spec.cwd]
   for (const [key, value] of Object.entries(spec.env)) {
     args.push('-e', `${key}=${value}`)
   }
@@ -208,6 +209,7 @@ async function httpExec(
       AttachStdout: true,
       AttachStderr: true,
       Tty: false,
+      User: 'neo',
       Cmd: spec.cmd,
       WorkingDir: spec.cwd,
       Env: envList,

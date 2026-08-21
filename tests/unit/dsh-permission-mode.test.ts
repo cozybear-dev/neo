@@ -40,4 +40,14 @@ describe('DSH permission mode in the compose stack', () => {
     )
     assert.match(entrypoint, /chmod 1777 "\/workspace\/\$\{d\}"/)
   })
+
+  it('sandbox entrypoint chmods /workspace as root then drops to neo', () => {
+    const entrypoint = read('docker/sandbox/entrypoint.sh')
+    const dockerfile = read('docker/sandbox/Dockerfile')
+    assert.match(entrypoint, /chmod 1777 \/workspace/)
+    assert.match(entrypoint, /runuser -u neo --/)
+    assert.match(dockerfile, /COPY\s+entrypoint\.sh/)
+    assert.match(dockerfile, /ENTRYPOINT\s+\["\/entrypoint\.sh"\]/)
+    assert.doesNotMatch(dockerfile, /^USER neo$/m)
+  })
 })

@@ -156,12 +156,16 @@ describe('delegate', () => {
   it('creates child artifact dirs world-writable', async () => {
     const dir = workspace()
     await executeDelegate({ agent_id: 'explore', prompt: 'x' }, { presets, workspaceDir: dir })
-    const st = statSync(join(dir, 'agents', 'explore'))
+    const artifactDir = join(dir, 'agents', 'explore')
+    const st = statSync(artifactDir)
     assert.ok(st.isDirectory())
-    // Production always passes mode 0o777; NTFS does not surface POSIX other-write bits.
+    // mkdirSync mode is umask-masked; production must chmodSync(dir, 0o777) after create.
     assert.equal(CHILD_ARTIFACT_MKDIR_OPTS.mode, 0o777)
+    const delegateSrc = readFileSync(new URL('./delegate.ts', import.meta.url), 'utf8')
+    assert.match(delegateSrc, /chmodSync\(\s*dir,\s*0o777\s*\)/)
+    // NTFS does not surface POSIX other-write bits from chmod.
     if (process.platform !== 'win32') {
-      assert.equal(st.mode & 0o077, 0o077)
+      assert.equal(st.mode & 0o002, 0o002)
     }
   })
 

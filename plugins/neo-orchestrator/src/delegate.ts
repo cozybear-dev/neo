@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   type AgentPreset,
@@ -379,7 +379,9 @@ function writeChildOutput(
   workspaceDir: string,
 ): ChildRunResult {
   const dir = join(workspaceDir, 'agents', preset.id)
+  // mode on mkdirSync is umask-masked (often 0755); chmod forces other-write for neo.
   mkdirSync(dir, { ...CHILD_ARTIFACT_MKDIR_OPTS })
+  chmodSync(dir, 0o777)
   const artifactPath = join(dir, `${runId}.json`).replace(/\\/g, '/')
   const artifacts = structured.artifacts.includes(artifactPath)
     ? structured.artifacts
