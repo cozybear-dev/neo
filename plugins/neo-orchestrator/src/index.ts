@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createTools } from './tools.ts'
-import { type SubagentStart } from './delegate.ts'
+import { DSH_AGENT_PLANE_TOOLS, type SubagentStart } from './delegate.ts'
 import {
   catalogPrompt,
   loadPresetsFromDir,
@@ -25,6 +25,7 @@ export {
 } from './presets.js'
 
 export {
+  DSH_AGENT_PLANE_TOOLS,
   executeDelegate,
   resolveChildren,
   assertParallelGroupSize,
@@ -38,18 +39,21 @@ function asSubagents(ctx: Context): SubagentStart | undefined {
   return raw
 }
 
-function listKnownGlobalTools(ctx: Context): string[] | undefined {
+function listKnownGlobalTools(ctx: Context, parent?: unknown): string[] | undefined {
   const tools = (ctx.get('tools') ?? ctx.tools) as
     | { schemas?: (scope?: unknown) => Array<{ name?: string }> }
     | undefined
   if (!tools || typeof tools.schemas !== 'function') return undefined
   try {
-    const names = tools.schemas()
+    const fromParent = parent != null ? tools.schemas(parent) : []
+    const fromGlobal = tools.schemas()
+    const names = [...fromParent, ...fromGlobal]
       .map((schema) => schema?.name)
       .filter((name): name is string => typeof name === 'string' && name.length > 0)
-    return names.length > 0 ? names : undefined
+    const merged = new Set([...names, ...DSH_AGENT_PLANE_TOOLS])
+    return [...merged]
   } catch {
-    return undefined
+    return [...DSH_AGENT_PLANE_TOOLS]
   }
 }
 
@@ -71,6 +75,6 @@ export function apply(ctx: Context): void {
     workspaceDir,
     env: process.env,
     getSubagents: () => asSubagents(ctx),
-    getKnownGlobalTools: () => listKnownGlobalTools(ctx),
+    getKnownGlobalTools: (parent?: unknown) => listKnownGlobalTools(ctx, parent),
   })) ctx.tools.register(defineTool(def))
 }

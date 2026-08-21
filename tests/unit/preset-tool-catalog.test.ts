@@ -37,4 +37,21 @@ describe('preset tool allowlists', () => {
       ['web_search', 'web_fetch'],
     )
   })
+
+  it('filterAllowlist with parentVisible keeps YAML ∩ parentVisible, not plugin-only known', () => {
+    const pluginOnly = ['delegate', 'memory_get', 'memory_update', 'sandbox_exec']
+    const parentVisible = [
+      ...pluginOnly,
+      'read', 'write', 'glob', 'grep', 'web_search', 'skill',
+    ]
+    const allow = filterAllowlist(
+      ['memory_get', 'read', 'write', 'glob', 'grep', 'web_search', 'skill', 'bash'],
+      pluginOnly,
+      parentVisible,
+    )
+    assert.deepEqual(allow, [
+      'memory_get', 'read', 'write', 'glob', 'grep', 'web_search', 'skill',
+    ])
+    assert.equal(allow.includes('bash'), false)
+  })
 })

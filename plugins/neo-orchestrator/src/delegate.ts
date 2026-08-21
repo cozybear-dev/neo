@@ -67,10 +67,20 @@ export interface DelegateOptions {
   onSpawnedAgent?: (agent: unknown, agentId: string) => void
   /** Host-registered global tool names. Unknown allowlist entries are dropped so tools.restrict() can apply. */
   knownGlobalTools?: Iterable<string>
+  /**
+   * Parent-visible tool names (e.g. tools.schemas(parent) ∪ agent-plane builtins).
+   * When non-empty, filterAllowlist uses this instead of the plugin-only known set.
+   */
+  parentVisibleTools?: Iterable<string>
 }
 
 const DEFAULT_CONCURRENCY = 4
 const JUDGE_ONLY_CHILD = 'verifier'
+
+/** Agent-plane builtins plus bash (YAML that allows bash can keep it). */
+export const DSH_AGENT_PLANE_TOOLS = [
+  'bash', 'read', 'write', 'edit', 'glob', 'grep', 'skill', 'web_search',
+] as const
 
 export function parseParallelGroup(raw: unknown): ParallelChild[] | undefined {
   if (raw == null) return undefined
@@ -131,9 +141,19 @@ export function assertParallelGroupSize(
 /**
  * DSH `tools.restrict({ allow })` throws on names that are not currently
  * registered global tools (this host has `web_search` but not `web_fetch`).
- * When the host catalog is known, drop those names; otherwise keep the yaml list.
+ * When parentVisible is a non-empty set, intersect YAML with that catalog
+ * (agent-plane builtins + parent schemas). Otherwise fall back to known
+ * (often plugin-only schemas()); if known is missing/empty, keep the yaml list.
  */
-export function filterAllowlist(allow: readonly string[], known?: Iterable<string>): string[] {
+export function filterAllowlist(
+  allow: readonly string[],
+  known?: Iterable<string>,
+  parentVisible?: Iterable<string>,
+): string[] {
+  const parent = parentVisible != null ? new Set(parentVisible) : undefined
+  if (parent && parent.size > 0) {
+    return allow.filter((name) => parent.has(name))
+  }
   if (known == null) return [...allow]
   const set = known instanceof Set ? known : new Set(known)
   if (set.size === 0) return [...allow]
@@ -241,7 +261,13 @@ async function runSpawn(
     parent: opts.parent,
     signal: opts.signal,
     persona: preset.persona,
-    toolFilter: { allow: filterAllowlist(preset.tool_allowlist, opts.knownGlobalTools) },
+    toolFilter: {
+      allow: filterAllowlist(
+        preset.tool_allowlist,
+        opts.knownGlobalTools,
+        opts.parentVisibleTools,
+      ),
+    },
     outputSchema: SPECIALIST_OUTPUT_SCHEMA,
     agentOptions: { neoAgentId: preset.id },
     ...(injectBlocks ? { inject: injectBlocks } : {}),

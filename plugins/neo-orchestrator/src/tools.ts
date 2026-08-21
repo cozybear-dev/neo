@@ -29,9 +29,10 @@ export type CreateToolsOptions = {
   env?: Record<string, string | undefined>
   subagents?: SubagentStart
   knownGlobalTools?: Iterable<string>
+  parentVisibleTools?: Iterable<string>
   /** Called from execute, not createTools, so the live catalog includes `delegate`. */
   getSubagents?: () => SubagentStart | undefined
-  getKnownGlobalTools?: () => Iterable<string> | undefined
+  getKnownGlobalTools?: (parent?: unknown) => Iterable<string> | undefined
 }
 
 const callerIds = new WeakMap<object, string>()
@@ -121,9 +122,14 @@ export function createTools(deps?: CreateToolsOptions): ToolDef[] {
     },
     async execute(args, exec) {
       const subagents = options.getSubagents ? options.getSubagents() : options.subagents
+      // Execute-time snapshot so `delegate` is visible to planner/swarm/judge children.
       const knownGlobalTools = options.getKnownGlobalTools
-        ? options.getKnownGlobalTools()
+        ? options.getKnownGlobalTools(exec.agent)
         : options.knownGlobalTools
+      // Getter returns parent∪global∪agent-plane; reuse as parentVisible. Else pass option through.
+      const parentVisibleTools = options.getKnownGlobalTools
+        ? knownGlobalTools
+        : options.parentVisibleTools
       return executeDelegate(args as DelegateArgs, {
         presets,
         workspaceDir,
@@ -133,6 +139,7 @@ export function createTools(deps?: CreateToolsOptions): ToolDef[] {
         callerAgentId: callerAgentId(exec),
         subagents,
         knownGlobalTools,
+        parentVisibleTools,
         onSpawnedAgent: (agent, id) => {
           if (agent && typeof agent === 'object') callerIds.set(agent, id)
         },

@@ -26,6 +26,8 @@ export const DSH_BUILTIN_TOOLS = [
   'bash', 'read', 'write', 'glob', 'grep', 'skill', 'web_search',
 ] as const
 
+export { DSH_AGENT_PLANE_TOOLS } from '../../plugins/neo-orchestrator/src/delegate.ts'
+
 export function allNeoToolDefs() {
   return [
     ...scopeTools(),

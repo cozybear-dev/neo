@@ -315,6 +315,45 @@ describe('delegate', () => {
     assert.equal(result.results[0]!.summary, 'plan written')
   })
 
+  it('keeps DSH agent-plane builtins when host schemas() is plugin-only', async () => {
+    const pluginOnly = [
+      'delegate', 'scope_check', 'memory_get', 'memory_update',
+      'sandbox_exec', 'issue_query', 'issue_create',
+    ]
+    let seen: Record<string, unknown> | undefined
+    await executeDelegate(
+      { agent_id: 'research', prompt: 'map the stack' },
+      {
+        presets,
+        workspaceDir: workspace(),
+        parent: { id: 'orchestrator-session' },
+        knownGlobalTools: pluginOnly,
+        // NEW: parent-visible catalog, as tools.schemas(parent) would return
+        parentVisibleTools: [...pluginOnly, 'read', 'write', 'glob', 'grep', 'web_search', 'skill'],
+        subagents: {
+          async start(_name, request) {
+            seen = request
+            return {
+              id: 'child-1',
+              localAgent: {},
+              result: Promise.resolve({
+                stopReason: 'completed',
+                structured: { summary: 'ok', artifacts: [] },
+              }),
+              async dispose() {},
+            }
+          },
+        },
+      },
+    )
+    const allow = (seen?.toolFilter as { allow: string[] }).allow
+    for (const name of ['read', 'write', 'glob', 'grep', 'web_search', 'skill']) {
+      assert.ok(allow.includes(name), `research lost ${name}`)
+    }
+    assert.equal(allow.includes('web_fetch'), false)
+    assert.equal(allow.includes('bash'), false)
+  })
+
   it('resolves knownGlobalTools at execute time so planner children keep delegate', async () => {
     const names = [
       'memory_get',
