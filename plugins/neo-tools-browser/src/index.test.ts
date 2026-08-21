@@ -17,6 +17,7 @@ import {
   type PlaywrightPage,
   type WsLike,
 } from './client.ts'
+import { createTools } from './tools.ts'
 
 function memFs(): FsLike & { files: Map<string, string | Uint8Array> } {
   const files = new Map<string, string | Uint8Array>()
@@ -147,6 +148,28 @@ describe('browser_navigate', () => {
       () => browserNavigate({ url: 'http://juice-shop/' }, { session: fakeSession(), signal: ac.signal, skipScopeCheck: true }),
       (err: unknown) => (err as Error).name === 'AbortError',
     )
+  })
+
+  it('browser_navigate tool threads exec.agent into scope_check task_id', async () => {
+    const session = fakeSession()
+    const scopeCalls: Array<{ url: string; body: unknown }> = []
+    const [tool] = createTools({
+      session,
+      fetch: allowFetch({ calls: scopeCalls }),
+      env: { CONTROL_URL: 'http://control:8090' },
+    })
+    assert.equal(tool.name, 'browser_navigate')
+    await tool.execute(
+      { url: 'http://juice-shop.lab.internal/' },
+      {
+        signal: new AbortController().signal,
+        agent: { id: 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78' },
+      },
+    )
+    assert.deepEqual(scopeCalls[0]?.body, {
+      target: 'juice-shop.lab.internal',
+      task_id: 'ef2b412d-84ac-4cde-8330-bdfd04154c78',
+    })
   })
 })
 

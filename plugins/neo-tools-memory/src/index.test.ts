@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { getMemory, updateMemory, type FetchLike } from './client.ts'
-import { taskIdFromSession } from './task.ts'
+import { getMemory, updateMemory, updateTask, type FetchLike } from './client.ts'
+import { ensureTaskId, taskIdFromSession } from './task.ts'
+import { createTools } from './tools.ts'
 
 function jsonFetch(
   handler: (url: string, init?: Parameters<FetchLike>[1]) => { status: number; body: unknown },
@@ -126,5 +127,93 @@ describe('memory tools', () => {
       () => getMemory({ task_id: TASK_UUID }, { fetch: fetchImpl, env: {} }),
       /task not found/,
     )
+  })
+
+  it('ensureTaskId treats POST /tasks 409 as success', async () => {
+    const calls: string[] = []
+    const fetchImpl = jsonFetch((url, init) => {
+      calls.push(`${init?.method ?? 'GET'} ${url}`)
+      if (url.endsWith('/tasks') && init?.method === 'POST') {
+        return { status: 409, body: { error: 'task already exists', id: TASK_UUID } }
+      }
+      if (url.includes(`/tasks/${TASK_UUID}`) && (init?.method ?? 'GET') === 'GET') {
+        return { status: 404, body: { error: 'task not found' } }
+      }
+      return { status: 500, body: { error: 'unexpected' } }
+    })
+    const id = await ensureTaskId({
+      arg: TASK_UUID,
+      env: {},
+      fetch: fetchImpl,
+    })
+    assert.equal(id, TASK_UUID)
+    assert.ok(calls.some((c) => c.startsWith('POST ') && c.endsWith('/tasks')))
+  })
+
+  it('updateTask PATCHes allowlist and denylist', async () => {
+    let method = ''
+    let url = ''
+    let posted: unknown
+    const fetchImpl = jsonFetch((u, init) => {
+      const verb = init?.method ?? 'GET'
+      if (u.includes(`/tasks/${TASK_UUID}`) && verb === 'GET') {
+        return { status: 200, body: { id: TASK_UUID } }
+      }
+      if (u.includes(`/tasks/${TASK_UUID}`) && verb === 'PATCH') {
+        method = 'PATCH'
+        url = u
+        posted = init?.body ? JSON.parse(init.body) : null
+        return {
+          status: 200,
+          body: {
+            id: TASK_UUID,
+            allowlist: ['huntandhackett.com', '*.huntandhackett.com'],
+            denylist: ['admin.huntandhackett.com'],
+          },
+        }
+      }
+      return { status: 500, body: { error: 'unexpected' } }
+    })
+    const result = await updateTask(
+      {
+        task_id: TASK_UUID,
+        allowlist: ['huntandhackett.com', '*.huntandhackett.com'],
+        denylist: ['admin.huntandhackett.com'],
+      },
+      { fetch: fetchImpl, env: {} },
+    )
+    assert.deepEqual(result, { ok: true })
+    assert.equal(method, 'PATCH')
+    assert.equal(url, `http://control:8090/tasks/${TASK_UUID}`)
+    assert.deepEqual(posted, {
+      allowlist: ['huntandhackett.com', '*.huntandhackett.com'],
+      denylist: ['admin.huntandhackett.com'],
+    })
+  })
+
+  it('task_update tool execute PATCHes /tasks/:id', async () => {
+    let method = ''
+    let posted: unknown
+    const fetchImpl = jsonFetch((u, init) => {
+      if ((init?.method ?? 'GET') === 'GET' && u.includes(`/tasks/${TASK_UUID}`)) {
+        return { status: 200, body: { id: TASK_UUID } }
+      }
+      if (init?.method === 'PATCH') {
+        method = 'PATCH'
+        posted = init.body ? JSON.parse(init.body) : null
+        return { status: 200, body: { id: TASK_UUID, allowlist: ['*.example.com'] } }
+      }
+      return { status: 500, body: { error: 'unexpected' } }
+    })
+    const tools = createTools({ fetch: fetchImpl, env: {} })
+    const tool = tools.find((t) => t.name === 'task_update')
+    assert.ok(tool)
+    const value = await tool.execute(
+      { allowlist: ['*.example.com'], task_id: TASK_UUID },
+      { signal: new AbortController().signal },
+    )
+    assert.deepEqual(value, { ok: true })
+    assert.equal(method, 'PATCH')
+    assert.deepEqual(posted, { allowlist: ['*.example.com'] })
   })
 })

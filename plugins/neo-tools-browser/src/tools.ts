@@ -36,6 +36,15 @@ const capturedRequest = {
   },
 }
 
+function agentOpt(exec: { agent?: unknown }): { id?: string } | undefined {
+  const agent = exec.agent
+  if (agent && typeof agent === 'object' && 'id' in agent) {
+    const id = (agent as { id?: unknown }).id
+    if (typeof id === 'string') return { id }
+  }
+  return undefined
+}
+
 export function createTools(deps?: ClientOptions): ToolDef[] {
   const options = deps ?? {}
   return [
@@ -67,7 +76,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
             url: String(args.url ?? ''),
             wait: typeof args.wait === 'string' ? args.wait : undefined,
           },
-          { ...options, signal: exec.signal },
+          { ...options, signal: exec.signal, agent: agentOpt(exec) },
         )
       },
     },
@@ -105,7 +114,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
             text: typeof args.text === 'string' ? args.text : undefined,
             instruction: String(args.instruction ?? ''),
           },
-          { ...options, signal: exec.signal },
+          { ...options, signal: exec.signal, agent: agentOpt(exec) },
         )
       },
     },
@@ -126,7 +135,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
       async execute(args, exec) {
         return browserEval(
           { expression: String(args.expression ?? '') },
-          { ...options, signal: exec.signal },
+          { ...options, signal: exec.signal, agent: agentOpt(exec) },
         )
       },
     },
@@ -143,7 +152,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         render: renderSafe,
       },
       async execute(_args, exec) {
-        return browserScreenshot({ ...options, signal: exec.signal })
+        return browserScreenshot({ ...options, signal: exec.signal, agent: agentOpt(exec) })
       },
     },
     {
@@ -161,7 +170,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         render: renderSafe,
       },
       async execute(_args, exec) {
-        return browserNetwork({ ...options, signal: exec.signal })
+        return browserNetwork({ ...options, signal: exec.signal, agent: agentOpt(exec) })
       },
     },
   ]

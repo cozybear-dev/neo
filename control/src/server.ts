@@ -153,12 +153,20 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance> 
     const denylist = Array.isArray(body.denylist) ? body.denylist : []
     const status = typeof body.status === 'string' && body.status ? body.status : 'pending'
 
-    await pool.query(
-      `INSERT INTO tasks (id, mode, objective, allowlist, denylist, status)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [id, body.mode, body.objective, body.allowlist, denylist, status],
-    )
-    await pool.query(`INSERT INTO task_memory (task_id) VALUES ($1)`, [id])
+    try {
+      await pool.query(
+        `INSERT INTO tasks (id, mode, objective, allowlist, denylist, status)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [id, body.mode, body.objective, body.allowlist, denylist, status],
+      )
+      await pool.query(`INSERT INTO task_memory (task_id) VALUES ($1)`, [id])
+    } catch (err) {
+      const code = err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined
+      if (code === '23505') {
+        return reply.code(409).send({ error: 'task already exists', id })
+      }
+      throw err
+    }
 
     return reply.code(201).send({
       id,

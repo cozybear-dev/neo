@@ -433,4 +433,23 @@ describe('control API (postgres)', { skip: !live }, () => {
     })
     assert.equal(missing.statusCode, 404)
   })
+
+  it('POST /tasks with duplicate id returns 409', async () => {
+    const id = randomUUID()
+    const first = await app.inject({
+      method: 'POST',
+      url: '/tasks',
+      payload: { id, mode: 'fast', objective: 'first', allowlist: ['localhost'] },
+    })
+    assert.equal(first.statusCode, 201)
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/tasks',
+      payload: { id, mode: 'thorough', objective: 'race', allowlist: ['localhost'] },
+    })
+    assert.equal(second.statusCode, 409)
+    assert.match(second.json().error, /already exists/)
+    assert.equal(second.json().id, id)
+  })
 })
