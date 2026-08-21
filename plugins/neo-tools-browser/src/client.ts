@@ -366,13 +366,49 @@ class CdpConn {
   }
 }
 
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return
+  throwIfAborted(signal)
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      const err = new Error('aborted')
+      err.name = 'AbortError'
+      reject(err)
+    }
+    if (!signal) return
+    if (signal.aborted) {
+      onAbort()
+      return
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 async function fetchJson(fetchImpl: FetchLike, url: string, signal?: AbortSignal): Promise<unknown> {
-  const res = await fetchImpl(url, { signal })
-  const text = await res.text()
-  if (res.status < 200 || res.status >= 300) {
-    throw new Error(`cdp http ${res.status}: ${text}`)
+  const attempts = 3
+  let lastErr: unknown
+  for (let i = 0; i < attempts; i++) {
+    throwIfAborted(signal)
+    try {
+      const res = await fetchImpl(url, { signal })
+      const text = await res.text()
+      if (res.status < 200 || res.status >= 300) {
+        throw new Error(`cdp http ${res.status}: ${text}`)
+      }
+      return text ? JSON.parse(text) : null
+    } catch (err) {
+      lastErr = err
+      if ((err as Error)?.name === 'AbortError') throw err
+      if (i === attempts - 1) break
+      await sleep(250, signal)
+    }
   }
-  return text ? JSON.parse(text) : null
+  throw lastErr
 }
 
 export async function connectCdp(opts: ClientOptions = {}): Promise<BrowserSession> {

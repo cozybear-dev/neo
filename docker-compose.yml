@@ -51,7 +51,7 @@ services:
       control:
         condition: service_healthy
       browser:
-        condition: service_started
+        condition: service_healthy
 
   sandbox:
     build:
@@ -75,6 +75,13 @@ services:
     # 9222 intentionally not published to the host; CDP is control-network only.
     expose:
       - "9222"
+    # Playwright image may lack curl; probe CDP with node fetch instead.
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:9222/json/version').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
     networks:
       - control
 

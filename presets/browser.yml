@@ -19,6 +19,8 @@ tool_allowlist:
   - traffic_search
   - read
   - write
+  - glob
+  - grep
   - skill
 skills:
   - xss-contexts

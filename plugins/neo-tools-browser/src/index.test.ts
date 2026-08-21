@@ -331,4 +331,49 @@ describe('CDP fallback', () => {
     const shot = await session.screenshot()
     assert.equal(Buffer.from(shot).toString(), 'png')
   })
+
+  it('retries CDP /json/list after fetch failed', async () => {
+    let n = 0
+    class FakeWs implements WsLike {
+      readyState = 0
+      onopen: ((ev: unknown) => void) | null = null
+      onmessage: ((ev: { data?: unknown }) => void) | null = null
+      onerror: ((ev: unknown) => void) | null = null
+      constructor(_url: string) {
+        queueMicrotask(() => {
+          this.readyState = 1
+          this.onopen?.(null)
+        })
+      }
+      addEventListener(type: string, fn: (ev: { data?: unknown }) => void) {
+        if (type === 'open') queueMicrotask(() => fn({}))
+        if (type === 'message') this.onmessage = fn
+      }
+      send(data: string) {
+        const msg = JSON.parse(data) as { id: number; method: string }
+        queueMicrotask(() => this.onmessage?.({ data: JSON.stringify({ id: msg.id, result: {} }) }))
+      }
+      close() {}
+    }
+    const fetchImpl: FetchLike = async (url) => {
+      if (String(url).includes('/json/list')) {
+        n += 1
+        if (n < 3) throw new Error('fetch failed')
+        return {
+          status: 200,
+          text: async () => JSON.stringify([
+            { type: 'page', webSocketDebuggerUrl: 'ws://browser:9222/devtools/page/1' },
+          ]),
+        }
+      }
+      return { status: 200, text: async () => '{}' }
+    }
+    await connectCdp({
+      fetch: fetchImpl,
+      ws: FakeWs,
+      skipScopeCheck: true,
+      cdpUrl: 'http://browser:9222',
+    })
+    assert.equal(n, 3)
+  })
 })

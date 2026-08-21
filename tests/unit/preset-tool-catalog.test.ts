@@ -25,6 +25,15 @@ describe('preset tool allowlists', () => {
     }
   })
 
+  it('browser allowlist includes glob and grep (sandbox_exec stays off)', () => {
+    const presets = loadPresetsFromDir(resolvePresetsDir())
+    const browser = presets.get('browser')
+    assert.ok(browser, 'missing browser preset')
+    assert.ok(browser.tool_allowlist.includes('glob'))
+    assert.ok(browser.tool_allowlist.includes('grep'))
+    assert.equal(browser.tool_allowlist.includes('sandbox_exec'), false)
+  })
+
   it('filterAllowlist drops names missing from the live host catalog', () => {
     const live = new Set(['delegate', 'web_search', 'read', 'write'])
     const allow = filterAllowlist(['web_search', 'web_fetch', 'read', 'not_a_tool'], live)
