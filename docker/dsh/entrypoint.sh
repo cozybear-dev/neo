@@ -29,7 +29,7 @@ if [[ -d "${EXA_PKG}" ]]; then
   ln -sfn "${EXA_PKG}" "${DSH_HOME}/profiles/node_modules/@deepseek-ai/dsh-web-search-exa"
 fi
 
-for pkg in neo-tools-scope neo-tools-memory neo-tools-issues neo-tools-oast neo-sandbox-docker neo-tools-browser neo-tools-traffic neo-tools-deploy neo-summarizer neo-orchestrator; do
+for pkg in neo-tools-scope neo-tools-memory neo-tools-issues neo-tools-oast neo-sandbox-docker neo-tools-browser neo-tools-traffic neo-tools-deploy neo-summarizer neo-orchestrator neo-fs-workspace; do
   if [[ -d "/opt/neo/plugins/${pkg}" ]]; then
     ln -sfn "/opt/neo/plugins/${pkg}" "${DSH_HOME}/profiles/node_modules/${pkg}"
   fi
@@ -143,5 +143,8 @@ for d in agents explore recon research sandbox browser verification; do
   mkdir -p "/workspace/${d}"
   chmod 1777 "/workspace/${d}" || true
 done
+# dsh write publishes new files as 0600. Sandbox user neo (a different uid)
+# must be able to read deliverables already on the volume.
+find /workspace -type f ! -perm -004 -exec chmod a+r {} + || true
 
 exec "$@"

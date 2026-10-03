@@ -36,6 +36,8 @@
       name: neo-summarizer
     - id: neo-orchestrator
       name: neo-orchestrator
+    - id: neo-fs-workspace
+      name: neo-fs-workspace
 
 # Isolation is the sandbox container. DSH same-world confinement
 # (workspace-write) has no backend in Docker/WSL2 and fail-closes.

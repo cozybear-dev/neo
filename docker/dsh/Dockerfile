@@ -47,6 +47,7 @@ COPY plugins/neo-tools-traffic /opt/neo/plugins/neo-tools-traffic
 COPY plugins/neo-tools-deploy /opt/neo/plugins/neo-tools-deploy
 COPY plugins/neo-summarizer /opt/neo/plugins/neo-summarizer
 COPY plugins/neo-orchestrator /opt/neo/plugins/neo-orchestrator
+COPY plugins/neo-fs-workspace /opt/neo/plugins/neo-fs-workspace
 COPY presets /opt/neo/presets
 COPY skills /opt/neo/skills
 COPY workflows /opt/neo/workflows

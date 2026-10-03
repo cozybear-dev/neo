@@ -17,6 +17,7 @@ tool_allowlist:
   - oast_register
   - oast_poll
   - read
+  - list_dir
   - write
   - glob
   - grep

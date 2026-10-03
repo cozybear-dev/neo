@@ -20,6 +20,7 @@ tool_allowlist:
   - issue_query
   - issue_create
   - read
+  - list_dir
   - write
   - glob
   - grep

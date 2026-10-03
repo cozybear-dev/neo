@@ -17,6 +17,7 @@ tool_allowlist:
   - task_update
   - issue_query
   - read
+  - list_dir
   - glob
   - grep
   - skill

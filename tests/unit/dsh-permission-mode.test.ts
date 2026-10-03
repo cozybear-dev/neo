@@ -39,6 +39,10 @@ describe('DSH permission mode in the compose stack', () => {
       /for d in agents explore recon research sandbox browser verification/,
     )
     assert.match(entrypoint, /chmod 1777 "\/workspace\/\$\{d\}"/)
+    assert.match(
+      entrypoint,
+      /find \/workspace -type f ! -perm -004 -exec chmod a\+r \{\} \+/,
+    )
   })
 
   it('sandbox entrypoint chmods /workspace as root then drops to neo', () => {

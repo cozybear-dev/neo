@@ -31,6 +31,8 @@
       name: neo-summarizer
     - id: neo-orchestrator
       name: neo-orchestrator
+    - id: neo-fs-workspace
+      name: neo-fs-workspace
 
 - id: sandbox-policy
   config:

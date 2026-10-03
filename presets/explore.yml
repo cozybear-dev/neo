@@ -17,6 +17,7 @@ tool_allowlist:
   - memory_get
   - memory_update
   - read
+  - list_dir
   - glob
   - grep
   - write

@@ -10,6 +10,7 @@ import { createTools as browserTools } from '../../plugins/neo-tools-browser/src
 import { createTools as trafficTools } from '../../plugins/neo-tools-traffic/src/tools.ts'
 import { createTools as deployTools } from '../../plugins/neo-tools-deploy/src/tools.ts'
 import { createTools as orchTools } from '../../plugins/neo-orchestrator/src/tools.ts'
+import { createTools as workspaceTools } from '../../plugins/neo-fs-workspace/src/tools.ts'
 
 export const NEO_TOOL_NAMES = [
   'scope_check', 'memory_get', 'memory_update', 'task_update',
@@ -20,6 +21,7 @@ export const NEO_TOOL_NAMES = [
   'traffic_search', 'traffic_replay',
   'deploy_up', 'deploy_down',
   'delegate',
+  'list_dir',
 ] as const
 
 export const DSH_BUILTIN_TOOLS = [
@@ -39,5 +41,16 @@ export function allNeoToolDefs() {
     ...trafficTools(),
     ...deployTools(),
     ...orchTools({ presets: undefined, workspaceDir: mkdtempSync(join(tmpdir(), 'neo-contract-')) }),
+    ...workspaceTools({
+      async resolve(path: string) {
+        return { targetKey: path, displayPath: path }
+      },
+      async stat() {
+        return undefined
+      },
+      async listDir() {
+        return []
+      },
+    }),
   ]
 }

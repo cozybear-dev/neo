@@ -18,6 +18,7 @@ tool_allowlist:
   - memory_update
   - traffic_search
   - read
+  - list_dir
   - write
   - glob
   - grep

@@ -19,6 +19,7 @@ tool_allowlist:
   - issue_create
   - issue_update
   - read
+  - list_dir
   - write
   - web_search
   - skill

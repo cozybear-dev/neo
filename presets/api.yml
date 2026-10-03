@@ -17,6 +17,7 @@ tool_allowlist:
   - traffic_search
   - traffic_replay
   - read
+  - list_dir
   - write
   - glob
   - grep

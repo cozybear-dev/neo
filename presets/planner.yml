@@ -16,6 +16,7 @@ tool_allowlist:
   - memory_update
   - task_update
   - read
+  - list_dir
   - glob
   - grep
   - write
