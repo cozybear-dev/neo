@@ -5,9 +5,11 @@
 - id: web-search-deepseek
   disabled: true
 
+# Restate fetchProvider: a patch replaces the row's whole config.
 - id: web
   config:
     searchProvider: exa
+    fetchProvider: http
 
 - insert:
     - id: web-search-exa
@@ -66,8 +68,12 @@
 
 # Compose publishes :3080; the CLI flag --host 0.0.0.0 is refused, so the
 # webserver row binds all interfaces from this overlay instead.
+# compression's schema default is 'none'; restate the bundle's gzip settings.
 - id: webserver
   inject: [webStartup]
   config:
     host: '0.0.0.0'
     port: !!js ctx.webStartup.port ?? 3080
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024

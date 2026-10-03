@@ -115,7 +115,7 @@ function fakeBrowserSession(overrides: Record<string, unknown> = {}) {
   }
 }
 
-describe('Neo tool contract (pin 141eb6f)', () => {
+describe('Neo tool contract (pin 5badb150)', () => {
   it('exports every catalog name exactly once and each definition compiles', () => {
     const defs = allNeoToolDefs()
     const names = defs.map((d) => d.name).sort()

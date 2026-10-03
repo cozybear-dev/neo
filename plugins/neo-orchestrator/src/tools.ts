@@ -65,7 +65,7 @@ export function createTools(deps?: CreateToolsOptions): ToolDef[] {
       'Spawn a named Neo specialist preset (persona + toolFilter + outputSchema). '
       + 'Pass parallel_group to start N children and await all (explore×3, verifier×5, swarm streams). '
       + 'Unknown agent_id is rejected. Size is capped by each preset max_parallel. '
-      + 'Children inherit the parent LLM provider/model. Prefer this over a generic subagent tool.',
+      + 'Do not pass a provider or model. When a workhorse model is configured, every child uses it; otherwise children inherit the parent. Prefer this over a generic subagent tool.',
     parameters: {
       agent_id: {
         type: 'string',

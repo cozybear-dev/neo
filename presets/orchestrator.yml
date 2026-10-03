@@ -16,7 +16,7 @@ persona: |
   /workspace/report.md. If judge needs retry, max 2 re-executions writing
   /workspace/verification/iteration-N.md.
 
-  Never pass a different LLM provider or model. Children inherit yours.
+  Do not request an LLM provider or model. Host configuration assigns the parent model and, when set, the workhorse model for every child.
   Prefer sandbox_exec over bash for any scan. Activate at most 3 skills.
   Android/iOS return unavailable without hardware; continue without them.
   Workflows: /opt/neo/workflows/pentest.md, triage.md, code-audit.md.

@@ -224,12 +224,101 @@ describe('delegate', () => {
     assert.deepEqual(seen?.toolFilter, { allow: getPreset(presets, 'research').tool_allowlist })
     assert.equal(seen?.outputSchema, SPECIALIST_OUTPUT_SCHEMA)
     assert.equal(seen?.parent, parent)
-    const opts = seen?.agentOptions as { neoAgentId?: string; provider?: string; model?: string }
+    const opts = seen?.agentOptions as {
+      neoAgentId?: string
+      provider?: string
+      model?: string
+      reasoningEffort?: string
+    }
     assert.equal(opts.neoAgentId, 'research')
     assert.equal(opts.provider, undefined)
     assert.equal(opts.model, undefined)
+    assert.equal(opts.reasoningEffort, undefined)
     assert.equal(result.results[0]!.summary, 'notes written')
     assert.equal(result.results[0]!.next_agent, 'cve')
+  })
+
+  it('passes the resolved workhorse route on every spawn', async () => {
+    let seen: Record<string, unknown> | undefined
+    const parent = { id: 'orchestrator-session' }
+    await executeDelegate(
+      { agent_id: 'research', prompt: 'map the stack' },
+      {
+        presets,
+        workspaceDir: workspace(),
+        parent,
+        env: {
+          NEO_RESOLVED_WORKHORSE_PROVIDER: 'deepseek-official',
+          NEO_RESOLVED_WORKHORSE_MODEL: 'deepseek-v4-flash',
+        },
+        subagents: {
+          async start(_name, request) {
+            seen = request
+            return {
+              id: 'child-1',
+              localAgent: { id: 'child-1' },
+              result: Promise.resolve({
+                stopReason: 'completed',
+                structured: {
+                  summary: 'ok',
+                  artifacts: [],
+                  findings_claimed: [],
+                  next_agent: '',
+                  blockers: [],
+                },
+              }),
+              async dispose() {},
+            }
+          },
+        },
+      },
+    )
+    const opts = seen?.agentOptions as { provider?: string; model?: string; reasoningEffort?: string }
+    assert.equal(opts.provider, 'deepseek-official')
+    assert.equal(opts.model, 'deepseek-v4-flash')
+    assert.equal(opts.reasoningEffort, undefined)
+  })
+
+  it('passes workhorse reasoning effort only when it is set', async () => {
+    let seen: Record<string, unknown> | undefined
+    const parent = { id: 'orchestrator-session' }
+    await executeDelegate(
+      { agent_id: 'sandbox', prompt: 'run the check' },
+      {
+        presets,
+        workspaceDir: workspace(),
+        parent,
+        env: {
+          NEO_RESOLVED_WORKHORSE_PROVIDER: 'custom-workhorse',
+          NEO_RESOLVED_WORKHORSE_MODEL: 'qwen3:1.7b',
+          NEO_RESOLVED_WORKHORSE_REASONING_EFFORT: 'low',
+        },
+        subagents: {
+          async start(_name, request) {
+            seen = request
+            return {
+              id: 'child-1',
+              localAgent: { id: 'child-1' },
+              result: Promise.resolve({
+                stopReason: 'completed',
+                structured: {
+                  summary: 'ok',
+                  artifacts: [],
+                  findings_claimed: [],
+                  next_agent: '',
+                  blockers: [],
+                },
+              }),
+              async dispose() {},
+            }
+          },
+        },
+      },
+    )
+    const opts = seen?.agentOptions as { provider?: string; model?: string; reasoningEffort?: string }
+    assert.equal(opts.provider, 'custom-workhorse')
+    assert.equal(opts.model, 'qwen3:1.7b')
+    assert.equal(opts.reasoningEffort, 'low')
   })
 
   it('spawn request includes agentOptions.neoTaskId from the parent session id', async () => {

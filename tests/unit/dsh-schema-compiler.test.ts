@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { compileValueSchema, compileParameters, validateValue } from '../helpers/dsh-schema.ts'
 
-describe('DSH ValueSchemaSpec compiler (pin 141eb6f)', () => {
+describe('DSH ValueSchemaSpec compiler (pin 5badb150)', () => {
   it('rejects additionalProperties as a nested schema', () => {
     assert.throws(
       () => compileValueSchema({

@@ -43,7 +43,31 @@ Set `NEO_LLM_PROVIDER`, `NEO_LLM_MODEL`, and `NEO_LLM_API_KEY` (and `NEO_LLM_BAS
 | `openrouter` | OpenRouter router                          |
 | `custom`     | Custom/OpenAI-compatible (e.g. Ollama) via `NEO_LLM_BASE_URL` |
 
-All agents and the summarizer share one global provider/model.
+`NEO_LLM_*` is the model for the parent chat and for every delegated child. Two optional roles split that:
+
+| Role | Env prefix | Who uses it |
+|------|------------|-------------|
+| Orchestration | `NEO_LLM_ORCHESTRATOR_*` | New top-level chats. An existing chat keeps the model it was pinned to. |
+| Workhorse | `NEO_LLM_WORKHORSE_*` | Every `delegate()` child, including planner, swarm, judge, and children they spawn. |
+
+A role is active only when its `_MODEL` is set. Other fields for that role fall back to `NEO_LLM_*` when the provider matches. A different provider needs its own key (and `BASE_URL` for `custom`). When the workhorse is unset, children inherit the parent model. Tool summarization uses the model of the agent that executed the tool, so a child summary runs on the workhorse and a parent summary runs on the parent model.
+
+```bash
+# Parent chat on Claude, specialists on DeepSeek.
+NEO_LLM_PROVIDER=deepseek
+NEO_LLM_MODEL=deepseek-v4-flash
+NEO_LLM_API_KEY=sk-deepseek
+NEO_LLM_ORCHESTRATOR_PROVIDER=anthropic
+NEO_LLM_ORCHESTRATOR_MODEL=claude-sonnet-4-5
+NEO_LLM_ORCHESTRATOR_API_KEY=sk-ant
+NEO_LLM_WORKHORSE_MODEL=deepseek-v4-flash
+```
+
+Compose env is applied on every boot. Start a new chat after changing the parent model.
+
+The `dsh` image builds DeepSeek Harness `5badb15009ae1756c3afe0ae0cef1faafc290ccc` (`dsh@0.2.1-alpha.1`). Provider, model, and credential are written to `$DSH_HOME/neo-llm.patch.yml` and passed as `dsh --patch`. `settings.yaml` is a one-shot legacy import; a leftover file is renamed to `settings.yaml.neo-legacy` and is not applied.
+
+A `dsh-home` volume created on harness 0.1 may not open old chats. Start a new chat. Leave the volume in place, and do not run `migrate:sessions-to-v4` unless you choose to migrate those logs yourself.
 
 ## Skipped / out of v1
 

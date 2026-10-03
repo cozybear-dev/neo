@@ -288,6 +288,7 @@ async function runSpawn(
     ? [{ type: 'text', text: memoryNote }]
     : undefined
   const neoTaskId = neoTaskIdForChild(opts)
+  const workhorse = workhorseAgentOptions(opts.env)
   const run = await subagents.start('spawn', {
     label: preset.id,
     prompt: [{ type: 'text', text: childPrompt }],
@@ -305,6 +306,7 @@ async function runSpawn(
     agentOptions: {
       neoAgentId: preset.id,
       ...(neoTaskId ? { neoTaskId } : {}),
+      ...workhorse,
     },
     ...(injectBlocks ? { inject: injectBlocks } : {}),
   })
@@ -337,6 +339,23 @@ function taskIdFromSession(sessionId: string | undefined): string | undefined {
   if (!sessionId) return undefined
   const m = sessionId.match(UUID_EXTRACT_RE)
   return m ? m[0].toLowerCase() : undefined
+}
+
+/** Host-resolved workhorse route. Both provider and model must be set, or the child inherits. */
+export function workhorseAgentOptions(env: Record<string, string | undefined> | undefined): {
+  provider?: string
+  model?: string
+  reasoningEffort?: string
+} {
+  const provider = env?.NEO_RESOLVED_WORKHORSE_PROVIDER?.trim() ?? ''
+  const model = env?.NEO_RESOLVED_WORKHORSE_MODEL?.trim() ?? ''
+  if (provider === '' || model === '') return {}
+  const reasoningEffort = env?.NEO_RESOLVED_WORKHORSE_REASONING_EFFORT?.trim() ?? ''
+  return {
+    provider,
+    model,
+    ...(reasoningEffort !== '' ? { reasoningEffort } : {}),
+  }
 }
 
 function neoTaskIdForChild(opts: DelegateOptions): string | undefined {

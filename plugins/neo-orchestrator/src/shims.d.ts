@@ -48,7 +48,9 @@ declare module '@deepseek-ai/cordis' {
       section: (opts: {
         name: string
         order?: number
-        text: string | (() => string)
+        // Assembly passes { agent, scope: agent }. scope is the live agent,
+        // which catalogSectionText reads for options.neoAgentId.
+        text: string | ((context: { scope?: unknown; agent?: unknown }) => string)
       }) => void
     }
   }

@@ -6,7 +6,7 @@ export const name = 'neo-sandbox-docker'
 export const inject = ['tools']
 export { createTools } from './tools.ts'
 
-// Pin 141eb6f ctx.subprocess / ctx.fs need SubprocessRuntime (PTY, mux collect,
+// Pin 5badb150 ctx.subprocess / ctx.fs need SubprocessRuntime (PTY, mux collect,
 // resolveExecutable, tree terminate) and FileSystem policy events. Those seams
 // are not swapped: built-in bash/fs stay local to dsh. sandbox_exec docker-execs
 // into SANDBOX_CONTAINER (default neo-sandbox-1). Shared /workspace is the file bus.

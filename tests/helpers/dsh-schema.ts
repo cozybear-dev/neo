@@ -1,5 +1,5 @@
 /**
- * Test-only pin-matched ValueSchemaSpec compiler for DSH pin 141eb6f.
+ * Test-only pin-matched ValueSchemaSpec compiler for DSH pin 5badb150.
  * Mirrors packages/core/tools/src/schema.ts + json-schema.ts validation rules
  * without importing @deepseek-ai/dsh-tools.
  */
@@ -257,7 +257,7 @@ function runSchemaCompiler(initial: CompileTask): void {
   }
 }
 
-/** Compile one author-facing value schema (pin 141eb6f runSchemaCompiler rules). */
+/** Compile one author-facing value schema (pin 5badb150 runSchemaCompiler rules). */
 export function compileValueSchema(spec: unknown, path = 'schema'): unknown {
   const holder: { value?: JsonSchemaNode } = {}
   runSchemaCompiler({

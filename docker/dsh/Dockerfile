@@ -1,14 +1,17 @@
 # Pin DeepSeek Harness, overlay the neo profile, serve dsh --profile neo.
 FROM node:22-bookworm
 
+# dsh@0.2 builds with tsx and Node's type stripper (engines: ^22.19.0 || >=24).
+RUN node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 19)) { console.error("node " + process.versions.node + " is below 22.19"); process.exit(1); }'
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git python3 make g++ ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@11.7.0 --activate
 
-# Resolved at implement time: git ls-remote https://github.com/deepseek-ai/deepseek-harness.git HEAD
-ARG DSH_SHA=141eb6fef83422698aef7a981029e843e8161534
+# dsh@0.2.1-alpha.1, master HEAD on 2026-10-03.
+ARG DSH_SHA=5badb15009ae1756c3afe0ae0cef1faafc290ccc
 WORKDIR /opt/dsh
 RUN git init \
   && git remote add origin https://github.com/deepseek-ai/deepseek-harness.git \

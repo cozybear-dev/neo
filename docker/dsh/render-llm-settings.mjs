@@ -1,20 +1,31 @@
 #!/usr/bin/env node
 /**
- * Render $DSH_HOME/settings.yaml from NEO_LLM_* env.
+ * Render $DSH_HOME/neo-llm.patch.yml from NEO_LLM_* env.
+ *
+ * NEO_LLM_* is the fallback for every agent. Optional NEO_LLM_ORCHESTRATOR_*
+ * selects the parent chat model. Optional NEO_LLM_WORKHORSE_* is exported as
+ * NEO_RESOLVED_WORKHORSE_* for delegate(); it is not the parent default.
  *
  * Field names copied from deepseek-ai/deepseek-harness
- * 141eb6fef83422698aef7a981029e843e8161534:
+ * 5badb15009ae1756c3afe0ae0cef1faafc290ccc (dsh@0.2.1-alpha.1):
  *   agent-default-model.{provider,model,reasoningEffort}
  *   llm-pi-ai.providers.<route>.{apiKeyEnv,api,baseURL,models:[{id}]}
  *
- * Catalog adapter ids from that SHA's pi-ai directory
- * (apps/web/tests/snapshots/models-settings/empty.expected.md):
- *   openai, anthropic, openrouter, …
- * Native DeepSeek adapter route is `deepseek-official` (llm-deepseek),
- * not the pi-ai catalog id `deepseek`.
+ * At this SHA, settings.yaml is a one-shot legacy import. Live provider and
+ * model selection is a Cordis patch. llm-pi-ai stays dormant until a
+ * providers dict is supplied. Catalog routes (openai, anthropic, openrouter)
+ * need only apiKeyEnv; omitting api, baseURL, and models keeps the installed
+ * catalog. A custom route must set api, baseURL, and a non-empty models list.
+ * Native DeepSeek is the llm-deepseek route `deepseek-official`, not a pi-ai
+ * provider — emitting it on llm-pi-ai is DUPLICATE_ADAPTER.
+ *
+ * A patch replaces the targeted row's whole config. This file is applied with
+ * `dsh --patch` so env wins over a Models-page save for the session. Secrets
+ * stay in the process environment (`--export`); they are not written here.
  */
 
 const NATIVE_DEEPSEEK_ROUTE = 'deepseek-official'
+const PATCH_FILENAME = 'neo-llm.patch.yml'
 
 /** NEO_LLM_PROVIDER → DSH route + credential env (catalog ids verbatim). */
 const PROVIDERS = {
@@ -136,27 +147,24 @@ function renderAgentDefaultModel(selection) {
 }
 
 function renderCustomProviderBlock(selection) {
+  const models = Array.isArray(selection.models) && selection.models.length > 0
+    ? selection.models
+    : [selection.model]
   return [
     `    ${selection.route}:`,
     `      apiKeyEnv: ${yamlScalar(selection.keyEnvName)}`,
     `      api: ${yamlScalar(selection.api)}`,
     `      baseURL: ${yamlScalar(selection.baseURL)}`,
     '      models:',
-    `        - id: ${yamlScalar(selection.model)}`,
+    ...models.map((id) => `        - id: ${yamlScalar(id)}`),
   ].join('\n')
 }
 
-/**
- * Render env-owned settings. Catalog/native only set agent-default-model
- * (credentials are the mapped process env). Custom upserts a full llm-pi-ai
- * provider object. Catalog routes must not emit a stripped llm-pi-ai profile
- * that would wipe api / models / baseURL on merge.
- * @param {ReturnType<typeof resolveLlmSelection>} selection
- */
-export function renderOwnedSettings(selection) {
-  const defaultModel = renderAgentDefaultModel(selection)
-  if (selection.kind !== 'custom') return defaultModel
-  return `${defaultModel}llm-pi-ai:\n  providers:\n${renderCustomProviderBlock(selection)}\n`
+function renderCatalogProviderBlock(selection) {
+  return [
+    `    ${selection.route}:`,
+    `      apiKeyEnv: ${yamlScalar(selection.keyEnvName)}`,
+  ].join('\n')
 }
 
 function splitTopLevel(yaml) {
@@ -185,38 +193,7 @@ function joinSections(sections) {
     .join('\n\n')
 }
 
-/**
- * Drop a previously written agent-default-model section. llm-pi-ai is left
- * intact so catalog api / models / baseURL survive a catalog boot.
- * @param {string} yaml
- */
-export function stripOwnedNamespaces(yaml) {
-  if (trim(yaml) === '') return ''
-  return joinSections(splitTopLevel(yaml).filter((section) => section.key !== 'agent-default-model'))
-}
-
-function upsertCustomProvider(yaml, selection) {
-  const providerBlock = renderCustomProviderBlock(selection)
-  const sections = splitTopLevel(yaml)
-  const idx = sections.findIndex((section) => section.key === 'llm-pi-ai')
-  if (idx === -1) {
-    sections.push({
-      key: 'llm-pi-ai',
-      lines: ['llm-pi-ai:', '  providers:', ...providerBlock.split('\n')],
-    })
-    return joinSections(sections)
-  }
-  const lines = sections[idx].lines
-  const providersIdx = lines.findIndex((line) => /^  providers\s*:/.test(line))
-  if (providersIdx === -1) {
-    sections[idx] = {
-      key: 'llm-pi-ai',
-      lines: [lines[0], '  providers:', ...providerBlock.split('\n')],
-    }
-    return joinSections(sections)
-  }
-  const head = lines.slice(0, providersIdx + 1)
-  const tail = lines.slice(providersIdx + 1)
+function splitProviderBlocks(tail) {
   const blocks = []
   let current = null
   const afterProviders = []
@@ -238,33 +215,425 @@ function upsertCustomProvider(yaml, selection) {
     afterProviders.push(line)
   }
   if (current) blocks.push(current)
-  const kept = blocks.filter((block) => block.key !== selection.route)
+  return { blocks, afterProviders }
+}
+
+function upsertProviderSection(yaml, route, providerLines, replaceBlock) {
+  const sections = trim(yaml) === '' ? [] : splitTopLevel(yaml)
+  const idx = sections.findIndex((section) => section.key === 'llm-pi-ai')
+  if (idx === -1) {
+    sections.push({
+      key: 'llm-pi-ai',
+      lines: ['llm-pi-ai:', '  providers:', ...providerLines],
+    })
+    return joinSections(sections)
+  }
+  const lines = sections[idx].lines
+  const providersIdx = lines.findIndex((line) => /^  providers\s*:/.test(line))
+  if (providersIdx === -1) {
+    sections[idx] = {
+      key: 'llm-pi-ai',
+      lines: [lines[0], '  providers:', ...providerLines],
+    }
+    return joinSections(sections)
+  }
+  const head = lines.slice(0, providersIdx + 1)
+  const { blocks, afterProviders } = splitProviderBlocks(lines.slice(providersIdx + 1))
+  const kept = []
+  let replaced = false
+  for (const block of blocks) {
+    if (block.key !== route) {
+      kept.push(block)
+      continue
+    }
+    replaced = true
+    kept.push({ key: route, lines: replaceBlock(block.lines) })
+  }
+  if (!replaced) kept.push({ key: route, lines: providerLines })
   sections[idx] = {
     key: 'llm-pi-ai',
     lines: [
       ...head,
       ...kept.flatMap((block) => block.lines),
-      ...providerBlock.split('\n'),
       ...afterProviders,
     ],
   }
   return joinSections(sections)
 }
 
+function upsertCustomProvider(yaml, selection) {
+  const providerLines = renderCustomProviderBlock(selection).split('\n')
+  return upsertProviderSection(yaml, selection.route, providerLines, () => providerLines)
+}
+
+function upsertCatalogProvider(yaml, selection) {
+  const apiLine = `      apiKeyEnv: ${yamlScalar(selection.keyEnvName)}`
+  const providerLines = renderCatalogProviderBlock(selection).split('\n')
+  return upsertProviderSection(yaml, selection.route, providerLines, (lines) => {
+    const kept = lines.filter((line, index) => index === 0 || !/^\s+apiKeyEnv\s*:/.test(line))
+    kept.splice(1, 0, apiLine)
+    return kept
+  })
+}
+
+function isPatchDocument(yaml) {
+  return String(yaml).split('\n').some((line) => /^- id:/.test(line))
+}
+
+function patchConfigToSection(key, itemLines) {
+  const configIdx = itemLines.findIndex((line) => /^  config\s*:\s*$/.test(line))
+  if (configIdx === -1) return `${key}:`
+  const body = []
+  for (const line of itemLines.slice(configIdx + 1)) {
+    if (line.trim() === '') {
+      body.push('')
+      continue
+    }
+    if (!line.startsWith('    ')) break
+    body.push(line.slice(2))
+  }
+  while (body.length > 0 && body[body.length - 1].trim() === '') body.pop()
+  return [`${key}:`, ...body].join('\n')
+}
+
 /**
- * Env wins for agent-default-model on every boot. Catalog/native leave
- * llm-pi-ai.providers.* untouched. Custom upserts only the custom route.
+ * Accept a Cordis patch array or a legacy settings.yaml section map.
+ * Only llm-pi-ai is returned for merging. Other patch rows are preserved.
+ * Legacy sections other than llm-pi-ai are not cordis rows and are dropped.
+ * @param {string} yaml
+ */
+function parseExisting(yaml) {
+  const text = String(yaml ?? '').replace(/\r\n/g, '\n')
+  if (trim(text) === '') return { llm: '', rawItems: [] }
+  if (!isPatchDocument(text)) {
+    const llm = splitTopLevel(text).find((section) => section.key === 'llm-pi-ai')
+    return { llm: llm ? llm.lines.join('\n') : '', rawItems: [] }
+  }
+  const items = []
+  let current = null
+  for (const line of text.split('\n')) {
+    if (/^- /.test(line)) {
+      if (current) items.push(current)
+      current = [line]
+    } else if (current) {
+      current.push(line)
+    }
+  }
+  if (current) items.push(current)
+  let llm = ''
+  const rawItems = []
+  for (const item of items) {
+    const id = /^- id:\s*["']?([A-Za-z0-9_-]+)["']?\s*$/.exec(item[0])
+    if (!id) {
+      rawItems.push(item)
+      continue
+    }
+    if (id[1] === 'agent-default-model') continue
+    if (id[1] === 'llm-pi-ai') {
+      llm = patchConfigToSection('llm-pi-ai', item)
+      continue
+    }
+    rawItems.push(item)
+  }
+  return { llm, rawItems }
+}
+
+function sectionTextToPatch(key, text) {
+  const lines = String(text).replace(/\n+$/, '').split('\n')
+  const body = lines.slice(1).filter((line, index, all) => {
+    if (line.trim() !== '') return true
+    return all.slice(index + 1).some((later) => later.trim() !== '')
+  })
+  if (body.length === 0) return `- id: ${key}`
+  return [`- id: ${key}`, '  config:', ...body.map((line) => (line.trim() === '' ? '' : `  ${line}`))].join('\n')
+}
+
+function emitPatch(modelText, llmText, rawItems) {
+  const chunks = [sectionTextToPatch('agent-default-model', modelText)]
+  if (trim(llmText) !== '') chunks.push(sectionTextToPatch('llm-pi-ai', llmText))
+  for (const raw of rawItems) {
+    const text = raw.join('\n').replace(/\n+$/, '').trimEnd()
+    if (text !== '') chunks.push(text)
+  }
+  return `${chunks.join('\n')}\n`
+}
+
+const ROLE_PREFIX = {
+  ORCHESTRATOR: 'NEO_LLM_ORCHESTRATOR',
+  WORKHORSE: 'NEO_LLM_WORKHORSE',
+}
+
+const ROLE_FIELDS = ['PROVIDER', 'MODEL', 'API_KEY', 'BASE_URL', 'API', 'API_KEY_ENV', 'REASONING_EFFORT']
+
+function roleValue(env, prefix, field) {
+  return trim(env[`${prefix}_${field}`])
+}
+
+function activeSelections(profile) {
+  return [profile.base, profile.orchestrator, profile.workhorse].filter(Boolean)
+}
+
+/**
+ * A role is active only when its MODEL is set. Any other role field without
+ * MODEL is a partial config and fails startup.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string} prefix
+ */
+function roleModel(env, prefix) {
+  const model = roleValue(env, prefix, 'MODEL')
+  const partial = ROLE_FIELDS.some((field) => field !== 'MODEL' && roleValue(env, prefix, field) !== '')
+  if (model === '' && partial) {
+    throw new LlmSettingsError(`${prefix}_MODEL is required when other ${prefix}_* settings are set`)
+  }
+  return model
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} env
+ * @param {'ORCHESTRATOR' | 'WORKHORSE'} roleKey
+ * @param {ReturnType<typeof resolveLlmSelection>} base
+ */
+function resolveRole(env, roleKey, base) {
+  const prefix = ROLE_PREFIX[roleKey]
+  const model = roleModel(env, prefix)
+  if (model === '') return undefined
+
+  const providerInput = roleValue(env, prefix, 'PROVIDER') || base.providerInput
+  const spec = PROVIDERS[providerInput]
+  if (spec === undefined) {
+    throw new LlmSettingsError(
+      `${prefix}_PROVIDER=${JSON.stringify(providerInput)} is not supported `
+        + '(expected deepseek, openai, anthropic, openrouter, or custom)',
+    )
+  }
+
+  const sameProvider = providerInput === base.providerInput
+  const explicitKey = roleValue(env, prefix, 'API_KEY')
+  const explicitKeyEnv = roleValue(env, prefix, 'API_KEY_ENV')
+  const explicitBaseURL = roleValue(env, prefix, 'BASE_URL')
+  const explicitApi = roleValue(env, prefix, 'API')
+  let apiKey = explicitKey
+  if (apiKey === '') {
+    if (sameProvider) apiKey = base.apiKey
+    else if (spec.kind !== 'custom') apiKey = trim(env[spec.keyEnv])
+  }
+  if (spec.kind !== 'custom' && apiKey === '') {
+    throw new LlmSettingsError(
+      `cloud provider ${providerInput} needs ${spec.keyEnv} or ${prefix}_API_KEY`,
+    )
+  }
+
+  const reasoningEffort = roleValue(env, prefix, 'REASONING_EFFORT') || undefined
+  const role = roleKey.toLowerCase()
+
+  if (spec.kind === 'custom') {
+    let keyEnvName
+    if (explicitKeyEnv !== '') keyEnvName = explicitKeyEnv
+    else if (sameProvider && (explicitKey === '' || explicitKey === base.apiKey)) keyEnvName = base.keyEnvName
+    else keyEnvName = `${prefix}_API_KEY`
+    if (!API_KEY_ENV_PATTERN.test(keyEnvName)) {
+      throw new LlmSettingsError(
+        `credential env name ${JSON.stringify(keyEnvName)} must match ${String(API_KEY_ENV_PATTERN)}`,
+      )
+    }
+    const baseURL = explicitBaseURL || (sameProvider ? (base.baseURL || '') : '')
+    if (baseURL === '') {
+      throw new LlmSettingsError(`${prefix}_PROVIDER=custom requires ${prefix}_BASE_URL`)
+    }
+    const api = explicitApi || (sameProvider && base.api ? base.api : '') || 'openai-completions'
+    return {
+      providerInput,
+      kind: spec.kind,
+      route: spec.route,
+      model,
+      keyEnvName,
+      apiKey,
+      baseURL,
+      api,
+      reasoningEffort,
+      role,
+    }
+  }
+
+  return {
+    providerInput,
+    kind: spec.kind,
+    route: spec.route,
+    model,
+    keyEnvName: spec.keyEnv,
+    apiKey,
+    reasoningEffort,
+    role,
+  }
+}
+
+function assignRoutes(profile) {
+  /** @type {Map<string, { route: string, models: string[], keyEnvName: string, apiKey: string, api: string, baseURL: string }>} */
+  const customGroups = new Map()
+  for (const sel of activeSelections(profile)) {
+    if (sel.kind !== 'custom') continue
+    const groupKey = `${sel.api}\n${sel.baseURL}`
+    let group = customGroups.get(groupKey)
+    if (!group) {
+      const route = sel.role === 'base' ? 'custom' : `custom-${sel.role}`
+      group = {
+        route,
+        models: [],
+        keyEnvName: sel.keyEnvName,
+        apiKey: sel.apiKey,
+        api: sel.api,
+        baseURL: sel.baseURL,
+      }
+      customGroups.set(groupKey, group)
+    } else if (group.keyEnvName !== sel.keyEnvName || group.apiKey !== sel.apiKey) {
+      throw new LlmSettingsError(
+        `custom route ${group.route} would be configured with two different keys`,
+      )
+    }
+    if (!group.models.includes(sel.model)) group.models.push(sel.model)
+    sel.route = group.route
+    sel.models = group.models
+  }
+
+  /** @type {Map<string, { keyEnvName: string, apiKey: string }>} */
+  const byRoute = new Map()
+  for (const sel of activeSelections(profile)) {
+    if (sel.kind === 'custom') continue
+    const prev = byRoute.get(sel.route)
+    if (!prev) {
+      byRoute.set(sel.route, sel)
+      continue
+    }
+    if (prev.keyEnvName !== sel.keyEnvName || prev.apiKey !== sel.apiKey) {
+      throw new LlmSettingsError(
+        `route ${sel.route} would be configured with two different keys`,
+      )
+    }
+  }
+}
+
+function assertDistinctCredentials(profile) {
+  /** @type {Record<string, string>} */
+  const mapped = {}
+  for (const sel of activeSelections(profile)) {
+    if (sel.apiKey === '') continue
+    const prev = mapped[sel.keyEnvName]
+    if (prev !== undefined && prev !== sel.apiKey) {
+      throw new LlmSettingsError(
+        `credential env ${sel.keyEnvName} would be set to two different keys`,
+      )
+    }
+    mapped[sel.keyEnvName] = sel.apiKey
+  }
+  if (
+    profile.base.apiKey !== ''
+    && mapped.NEO_LLM_API_KEY !== undefined
+    && mapped.NEO_LLM_API_KEY !== profile.base.apiKey
+  ) {
+    throw new LlmSettingsError(
+      'credential env NEO_LLM_API_KEY would be set to two different keys',
+    )
+  }
+}
+
+/**
+ * Base selection plus optional orchestrator (parent chat) and workhorse (delegate children).
+ * Custom routes are assigned here. Same endpoint shares one route and its model ids.
+ * @param {NodeJS.ProcessEnv} env
+ */
+export function resolveLlmProfile(env) {
+  const base = { ...resolveLlmSelection(env), role: 'base' }
+  const profile = {
+    base,
+    orchestrator: resolveRole(env, 'ORCHESTRATOR', base),
+    workhorse: resolveRole(env, 'WORKHORSE', base),
+  }
+  assignRoutes(profile)
+  assertDistinctCredentials(profile)
+  return profile
+}
+
+function parentForPatch(profile) {
+  if (!profile.orchestrator) return profile.base
+  return {
+    ...profile.orchestrator,
+    reasoningEffort: profile.orchestrator.reasoningEffort || profile.base.reasoningEffort,
+  }
+}
+
+/**
+ * Env-owned Cordis patch for the whole profile. Parent row is the orchestrator
+ * selection when that role is active, otherwise the base selection.
+ * @param {string} existing
+ * @param {ReturnType<typeof resolveLlmProfile>} profile
+ */
+export function renderProfileSettings(existing, profile) {
+  const parsed = parseExisting(existing)
+  let llm = parsed.llm
+  const seenCatalog = new Set()
+  const seenCustom = new Set()
+  for (const sel of activeSelections(profile)) {
+    if (sel.kind === 'catalog' && !seenCatalog.has(sel.route)) {
+      seenCatalog.add(sel.route)
+      llm = upsertCatalogProvider(llm, sel)
+    }
+    if (sel.kind === 'custom' && !seenCustom.has(sel.route)) {
+      seenCustom.add(sel.route)
+      llm = upsertCustomProvider(llm, sel)
+    }
+  }
+  return emitPatch(renderAgentDefaultModel(parentForPatch(profile)), llm, parsed.rawItems)
+}
+
+/**
+ * Adapter credentials plus internal NEO_RESOLVED_WORKHORSE_* exports.
+ * NEO_LLM_API_KEY stays the base key.
+ * @param {ReturnType<typeof resolveLlmProfile>} profile
+ */
+export function mappedProfileEnv(profile) {
+  const mapped = mappedCredentialEnv(profile.base)
+  for (const sel of [profile.orchestrator, profile.workhorse]) {
+    if (!sel || sel.apiKey === '') continue
+    if (mapped[sel.keyEnvName] !== undefined && mapped[sel.keyEnvName] !== sel.apiKey) {
+      throw new LlmSettingsError(
+        `credential env ${sel.keyEnvName} would be set to two different keys`,
+      )
+    }
+    mapped[sel.keyEnvName] = sel.apiKey
+  }
+  if (profile.workhorse) {
+    mapped.NEO_RESOLVED_WORKHORSE_PROVIDER = profile.workhorse.route
+    mapped.NEO_RESOLVED_WORKHORSE_MODEL = profile.workhorse.model
+    if (profile.workhorse.reasoningEffort) {
+      mapped.NEO_RESOLVED_WORKHORSE_REASONING_EFFORT = profile.workhorse.reasoningEffort
+    }
+  }
+  return mapped
+}
+
+/**
+ * Render the env-owned Cordis patch for one selection. Native DeepSeek sets
+ * agent-default-model only. Catalog routes also set apiKeyEnv and omit api,
+ * baseURL, and models. Custom upserts a full provider object.
+ * @param {ReturnType<typeof resolveLlmSelection>} selection
+ */
+export function renderOwnedSettings(selection) {
+  return mergeSettingsYaml('', selection)
+}
+
+/**
+ * Env wins for agent-default-model on every boot.
+ * Catalog updates apiKeyEnv and keeps api / models / baseURL plus siblings.
+ * Custom upserts only the custom route. Native leaves an existing llm-pi-ai row.
  * @param {string} existing
  * @param {ReturnType<typeof resolveLlmSelection>} selection
  */
 export function mergeSettingsYaml(existing, selection) {
-  let rest = stripOwnedNamespaces(existing)
-  if (selection.kind === 'custom') {
-    rest = upsertCustomProvider(rest, selection)
-  }
-  const defaultModel = renderAgentDefaultModel(selection).trimEnd()
-  if (rest === '') return `${defaultModel}\n`
-  return `${rest}\n\n${defaultModel}\n`
+  const parsed = parseExisting(existing)
+  let llm = parsed.llm
+  if (selection.kind === 'custom') llm = upsertCustomProvider(llm, selection)
+  else if (selection.kind === 'catalog') llm = upsertCatalogProvider(llm, selection)
+  return emitPatch(renderAgentDefaultModel(selection), llm, parsed.rawItems)
 }
 
 function shSingleQuote(value) {
@@ -300,6 +669,10 @@ function parseArgs(argv) {
   return flags
 }
 
+function patchPath(dshHome) {
+  return `${dshHome.replace(/[/\\]+$/, '')}/${PATCH_FILENAME}`
+}
+
 async function main(argv, env, io) {
   const flags = parseArgs(argv)
   if (flags.help) {
@@ -309,13 +682,13 @@ async function main(argv, env, io) {
     return 0
   }
 
-  const selection = resolveLlmSelection(env)
-  const mapped = mappedCredentialEnv(selection)
+  const profile = resolveLlmProfile(env)
+  const mapped = mappedProfileEnv(profile)
   const dshHome = flags.dshHome || trim(env.DSH_HOME)
-  const writePath = flags.write || (dshHome !== '' ? `${dshHome.replace(/[/\\]+$/, '')}/settings.yaml` : undefined)
+  const writePath = flags.write || (dshHome !== '' ? patchPath(dshHome) : undefined)
 
   if (flags.print && writePath === undefined) {
-    io.stdout.write(renderOwnedSettings(selection))
+    io.stdout.write(renderProfileSettings('', profile))
     if (flags.exportEnv) io.stdout.write(printExports(mapped))
     return 0
   }
@@ -334,7 +707,7 @@ async function main(argv, env, io) {
     } catch (error) {
       if (error.code !== 'ENOENT') throw error
     }
-    const merged = mergeSettingsYaml(existing, selection)
+    const merged = renderProfileSettings(existing, profile)
     await writeFile(writePath, merged, { encoding: 'utf8', mode: 0o600 })
     if (flags.print) io.stdout.write(merged)
   }
