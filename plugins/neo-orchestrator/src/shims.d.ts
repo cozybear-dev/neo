@@ -3,6 +3,10 @@ declare const process: {
   cwd: () => string
 }
 
+declare module 'node:crypto' {
+  export function randomUUID(): string
+}
+
 declare module 'node:fs' {
   export function readdirSync(path: string): string[]
   export function readFileSync(path: string, enc: string): string

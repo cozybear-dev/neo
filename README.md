@@ -21,6 +21,12 @@ docker compose up --build
 
 Open the harness UI: [http://127.0.0.1:3080](http://127.0.0.1:3080)
 
+## Harness test
+
+`npm test` is the offline suite. It does not boot DeepSeek Harness.
+
+`npm run test:harness` runs one scripted parent → `delegate` → explore session inside the `dsh` image against a local model stub. It does not open port 3080 and does not change the running UI container. Rebuild and recreate the `dsh` service before expecting this command to see source edits.
+
 ## Lab targets
 
 Optional vulnerable apps on the isolated `targets` network (no host ports):

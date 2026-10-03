@@ -183,7 +183,7 @@ export function buildModeMachinePrompt(mode = 'thorough') {
         'Thorough mode steps:',
         '1. Clarify scope with the user until targets and constraints are concrete.',
         '2. Delegate planner; planner spawns explore×3 via parallel_group (optional browser for visual recon).',
-        '3. Planner writes /workspace/plan.md; use DSH plan mode for the approval gate before execution.',
+        '3. Planner writes /workspace/plan.md; call ask_user_question to get explicit user approval before delegate(swarm).',
         '4. After approval, delegate swarm to decompose and run specialist workstreams.',
         '5. Delegate judge; judge may only spawn ≤5 verifiers (parallel_group capped by max_parallel).',
         '6. issue_create only for confirmed findings (never unverified in Thorough).',
@@ -194,6 +194,15 @@ export function buildModeMachinePrompt(mode = 'thorough') {
         return [...header, ...fast, 'Thorough reference (skipped in Fast):', ...thorough.slice(1)].join('\n');
     }
     return [...header, ...thorough, 'Fast reference (not active):', ...fast.slice(1)].join('\n');
+}
+export function isSpecialistScope(scope) {
+    if (!scope || typeof scope !== 'object')
+        return false;
+    const rec = scope;
+    const id = typeof rec.options?.neoAgentId === 'string'
+        ? rec.options.neoAgentId
+        : typeof rec.label === 'string' ? rec.label : '';
+    return id !== '' && id !== 'orchestrator' && REQUIRED_PRESET_IDS.includes(id);
 }
 export function catalogPrompt(presets, mode = process.env.NEO_MODE || 'thorough') {
     const rows = [...presets.values()]
@@ -211,4 +220,10 @@ export function catalogPrompt(presets, mode = process.env.NEO_MODE || 'thorough'
         'Agent catalog:',
         rows,
     ].join('\n');
+}
+/** DSH systemPrompt.section text: empty for specialist children, catalog for root/unknown. */
+export function catalogSectionText(context, presets = loadPresetsFromDir(resolvePresetsDir()), mode = process.env.NEO_MODE || 'thorough') {
+    if (isSpecialistScope(context?.scope))
+        return '';
+    return catalogPrompt(presets, mode);
 }

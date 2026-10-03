@@ -1,8 +1,43 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SPECIALIST_OUTPUT_SCHEMA, failClosedReason, getPreset, PresetError, } from "./presets.js";
+/** World-writable so sandbox USER neo can write under DSH-created agent dirs. */
+export const CHILD_ARTIFACT_MKDIR_OPTS = { recursive: true, mode: 0o777 };
 const DEFAULT_CONCURRENCY = 4;
 const JUDGE_ONLY_CHILD = 'verifier';
+/** Agent-plane builtins plus bash (YAML that allows bash can keep it). */
+export const DSH_AGENT_PLANE_TOOLS = [
+    'bash', 'read', 'write', 'edit', 'glob', 'grep', 'skill', 'web_search',
+];
+/**
+ * Parent-visible + global schemas, unioned with agent-plane builtins.
+ * `schemas(parent)` failure still runs `schemas()` so plugin tools are not stripped.
+ */
+export function listKnownGlobalTools(tools, parent) {
+    if (!tools || typeof tools.schemas !== 'function')
+        return undefined;
+    let fromParent = [];
+    if (parent != null) {
+        try {
+            fromParent = tools.schemas(parent) ?? [];
+        }
+        catch {
+            fromParent = [];
+        }
+    }
+    let fromGlobal = [];
+    try {
+        fromGlobal = tools.schemas() ?? [];
+    }
+    catch {
+        fromGlobal = [];
+    }
+    const names = [...fromParent, ...fromGlobal]
+        .map((schema) => schema?.name)
+        .filter((name) => typeof name === 'string' && name.length > 0);
+    return [...new Set([...names, ...DSH_AGENT_PLANE_TOOLS])];
+}
 export function parseParallelGroup(raw) {
     if (raw == null)
         return undefined;
@@ -57,6 +92,25 @@ export function assertParallelGroupSize(presets, children) {
             throw new PresetError(`parallel_group size ${n} exceeds max_parallel ${preset.max_parallel} for agent_id ${id}`);
         }
     }
+}
+/**
+ * DSH `tools.restrict({ allow })` throws on names that are not currently
+ * registered global tools (this host has `web_search` but not `web_fetch`).
+ * When parentVisible is a non-empty set, intersect YAML with that catalog
+ * (agent-plane builtins + parent schemas). Otherwise fall back to known
+ * (often plugin-only schemas()); if known is missing/empty, keep the yaml list.
+ */
+export function filterAllowlist(allow, known, parentVisible) {
+    const parent = parentVisible != null ? new Set(parentVisible) : undefined;
+    if (parent && parent.size > 0) {
+        return allow.filter((name) => parent.has(name));
+    }
+    if (known == null)
+        return [...allow];
+    const set = known instanceof Set ? known : new Set(known);
+    if (set.size === 0)
+        return [...allow];
+    return allow.filter((name) => set.has(name));
 }
 export function assertCallerPolicy(callerAgentId, children) {
     if (callerAgentId !== 'judge')
@@ -124,7 +178,7 @@ async function runOne(child, index, opts, backend) {
     return writeChildOutput(preset, runId, backend, structured, opts.workspaceDir);
 }
 async function runSpawn(preset, prompt, runId, opts) {
-    const start = opts.subagents.start;
+    const subagents = opts.subagents;
     const skillsNote = preset.skills.length > 0
         ? `\nActivate at most 3 skills from: ${preset.skills.join(', ')}.`
         : '';
@@ -139,16 +193,23 @@ async function runSpawn(preset, prompt, runId, opts) {
     const injectBlocks = memoryNote
         ? [{ type: 'text', text: memoryNote }]
         : undefined;
-    const run = await start('spawn', {
+    const neoTaskId = neoTaskIdForChild(opts);
+    const workhorse = workhorseAgentOptions(opts.env);
+    const run = await subagents.start('spawn', {
         label: preset.id,
         prompt: [{ type: 'text', text: childPrompt }],
         parent: opts.parent,
         signal: opts.signal,
         persona: preset.persona,
-        toolFilter: { allow: preset.tool_allowlist },
+        toolFilter: {
+            allow: filterAllowlist(preset.tool_allowlist, opts.knownGlobalTools, opts.parentVisibleTools),
+        },
         outputSchema: SPECIALIST_OUTPUT_SCHEMA,
-        agentOptions: { neoAgentId: preset.id },
-        ...(injectBlocks ? { inject: injectBlocks } : {}),
+        agentOptions: {
+            neoAgentId: preset.id,
+            ...(neoTaskId ? { neoTaskId } : {}),
+            ...workhorse,
+        },
     });
     try {
         if (run.localAgent && opts.onSpawnedAgent)
@@ -167,9 +228,42 @@ async function runSpawn(preset, prompt, runId, opts) {
         await run.dispose();
     }
 }
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_EXTRACT_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
+function taskIdFromSession(sessionId) {
+    if (!sessionId)
+        return undefined;
+    const m = sessionId.match(UUID_EXTRACT_RE);
+    return m ? m[0].toLowerCase() : undefined;
+}
+/** Host-resolved workhorse route. Both provider and model must be set, or the child inherits. */
+export function workhorseAgentOptions(env) {
+    const provider = env?.NEO_RESOLVED_WORKHORSE_PROVIDER?.trim() ?? '';
+    const model = env?.NEO_RESOLVED_WORKHORSE_MODEL?.trim() ?? '';
+    if (provider === '' || model === '')
+        return {};
+    const reasoningEffort = env?.NEO_RESOLVED_WORKHORSE_REASONING_EFFORT?.trim() ?? '';
+    return {
+        provider,
+        model,
+        ...(reasoningEffort !== '' ? { reasoningEffort } : {}),
+    };
+}
+function neoTaskIdForChild(opts) {
+    const env = opts.env ?? process.env;
+    const parent = opts.parent && typeof opts.parent === 'object'
+        ? opts.parent
+        : undefined;
+    const fromOptions = typeof parent?.options?.neoTaskId === 'string'
+        ? parent.options.neoTaskId.trim()
+        : undefined;
+    const parentId = typeof parent?.id === 'string' ? parent.id : undefined;
+    const candidates = [fromOptions, env.NEO_TASK_ID?.trim(), taskIdFromSession(parentId)];
+    return candidates.find((v) => v && UUID_RE.test(v));
+}
 async function formatTaskMemoryInject(opts) {
     const env = opts.env ?? process.env;
-    const taskId = env.NEO_TASK_ID?.trim();
+    const taskId = neoTaskIdForChild(opts);
     if (!taskId)
         return undefined;
     const control = (env.CONTROL_URL ?? 'http://control:8090').replace(/\/+$/, '');
@@ -205,10 +299,17 @@ async function injectIntoAgent(localAgent, blocks) {
     if (typeof agent.inject !== 'function')
         return;
     try {
-        await Promise.resolve(agent.inject(blocks));
+        // Agent.inject queues a UserMessage. A bare content-block array has no
+        // source, and the turn then throws reading message.source.kind.
+        await Promise.resolve(agent.inject({
+            role: 'user',
+            id: randomUUID(),
+            content: blocks,
+            source: { kind: 'user' },
+        }));
     }
     catch {
-        // best-effort; child still runs with start-request inject when supported
+        // best-effort; a child that rejects inject still runs its start prompt
     }
 }
 function inProcessRecord(preset, prompt) {
@@ -227,7 +328,9 @@ function inProcessRecord(preset, prompt) {
 }
 function writeChildOutput(preset, runId, backend, structured, workspaceDir) {
     const dir = join(workspaceDir, 'agents', preset.id);
-    mkdirSync(dir, { recursive: true });
+    // mode on mkdirSync is umask-masked (often 0755); chmod forces other-write for neo.
+    mkdirSync(dir, { ...CHILD_ARTIFACT_MKDIR_OPTS });
+    chmodSync(dir, 0o777);
     const artifactPath = join(dir, `${runId}.json`).replace(/\\/g, '/');
     const artifacts = structured.artifacts.includes(artifactPath)
         ? structured.artifacts

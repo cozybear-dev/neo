@@ -50,6 +50,7 @@ COPY plugins/neo-orchestrator /opt/neo/plugins/neo-orchestrator
 COPY presets /opt/neo/presets
 COPY skills /opt/neo/skills
 COPY workflows /opt/neo/workflows
+COPY tests/harness /opt/neo/tests/harness
 COPY docker/dsh/render-llm-settings.mjs /opt/neo/docker/dsh/render-llm-settings.mjs
 COPY docker/dsh/entrypoint.sh /opt/neo/docker/dsh/entrypoint.sh
 COPY docker/dsh/build-plugins.sh /opt/neo/docker/dsh/build-plugins.sh

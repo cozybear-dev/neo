@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -308,7 +309,6 @@ async function runSpawn(
       ...(neoTaskId ? { neoTaskId } : {}),
       ...workhorse,
     },
-    ...(injectBlocks ? { inject: injectBlocks } : {}),
   })
   try {
     if (run.localAgent && opts.onSpawnedAgent) opts.onSpawnedAgent(run.localAgent, preset.id)
@@ -409,9 +409,16 @@ async function injectIntoAgent(
   const agent = localAgent as { inject?: (payload: unknown) => unknown }
   if (typeof agent.inject !== 'function') return
   try {
-    await Promise.resolve(agent.inject(blocks))
+    // Agent.inject queues a UserMessage. A bare content-block array has no
+    // source, and the turn then throws reading message.source.kind.
+    await Promise.resolve(agent.inject({
+      role: 'user',
+      id: randomUUID(),
+      content: blocks,
+      source: { kind: 'user' },
+    }))
   } catch {
-    // best-effort; child still runs with start-request inject when supported
+    // best-effort; a child that rejects inject still runs its start prompt
   }
 }
 

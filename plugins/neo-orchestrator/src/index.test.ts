@@ -365,6 +365,120 @@ describe('delegate', () => {
     assert.equal(opts.neoTaskId, 'ef2b412d-84ac-4cde-8330-bdfd04154c78')
   })
 
+  it('injects task memory as a user message', async () => {
+    const parentId = 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78'
+    let startRequest: Record<string, unknown> | undefined
+    let injected: unknown
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async () => ({
+      ok: true,
+      async text() {
+        return JSON.stringify({ insights: [], facts: [], todos: [], files: [] })
+      },
+    })) as typeof fetch
+    try {
+      await executeDelegate(
+        { agent_id: 'explore', prompt: 'map the host' },
+        {
+          presets,
+          workspaceDir: workspace(),
+          parent: { id: parentId },
+          env: { CONTROL_URL: 'http://control.test' },
+          subagents: {
+            async start(_name, request) {
+              startRequest = request
+              return {
+                id: 'child-1',
+                localAgent: {
+                  id: 'child-1',
+                  inject(payload: unknown) {
+                    injected = payload
+                  },
+                },
+                result: Promise.resolve({
+                  stopReason: 'completed',
+                  structured: {
+                    summary: 'ok',
+                    artifacts: [],
+                    findings_claimed: [],
+                    next_agent: '',
+                    blockers: [],
+                  },
+                }),
+                async dispose() {},
+              }
+            },
+          },
+        },
+      )
+    } finally {
+      globalThis.fetch = origFetch
+    }
+    assert.equal(startRequest !== undefined && !('inject' in startRequest), true)
+    const message = injected as {
+      role?: string
+      id?: string
+      source?: { kind?: string }
+      content?: Array<{ type?: string; text?: string }>
+    }
+    assert.equal(message.role, 'user')
+    assert.equal(message.source?.kind, 'user')
+    assert.match(
+      message.id ?? '',
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    )
+    assert.equal(message.content?.[0]?.type, 'text')
+    assert.match(message.content?.[0]?.text ?? '', /Shared task memory/)
+  })
+
+  it('skips inject when task memory cannot be fetched', async () => {
+    const parentId = 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78'
+    let injected = false
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      throw new Error('offline')
+    }) as typeof fetch
+    try {
+      const result = await executeDelegate(
+        { agent_id: 'explore', prompt: 'map the host' },
+        {
+          presets,
+          workspaceDir: workspace(),
+          parent: { id: parentId },
+          env: { CONTROL_URL: 'http://control.test' },
+          subagents: {
+            async start() {
+              return {
+                id: 'child-1',
+                localAgent: {
+                  id: 'child-1',
+                  inject() {
+                    injected = true
+                  },
+                },
+                result: Promise.resolve({
+                  stopReason: 'completed',
+                  structured: {
+                    summary: 'ok',
+                    artifacts: [],
+                    findings_claimed: [],
+                    next_agent: '',
+                    blockers: [],
+                  },
+                }),
+                async dispose() {},
+              }
+            },
+          },
+        },
+      )
+      assert.equal(injected, false)
+      assert.equal(result.results[0]!.summary, 'ok')
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+
   it('keeps this on ctx.subagents.start (DSH SubagentRuntime.expectProvider)', async () => {
     class FakeSubagentRuntime {
       expectProvider(name: string) {

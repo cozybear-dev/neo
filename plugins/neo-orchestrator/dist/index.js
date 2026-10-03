@@ -1,119 +1,39 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { executeDelegate, } from "./delegate.js";
-import { catalogPrompt, loadPresetsFromDir, resolvePresetsDir, } from "./presets.js";
+import { createTools } from "./tools.js";
+import { listKnownGlobalTools } from "./delegate.js";
+import { catalogSectionText, loadPresetsFromDir, resolvePresetsDir, } from "./presets.js";
 export const name = 'neo-orchestrator';
 export const inject = ['tools'];
-export { REQUIRED_PRESET_IDS, SPECIALIST_OUTPUT_SCHEMA, parsePresetYaml, loadPresetsFromDir, resolvePresetsDir, getPreset, catalogPrompt, buildModeMachinePrompt, normalizeMode, } from './presets.js';
-export { executeDelegate, resolveChildren, assertParallelGroupSize, parseParallelGroup, } from './delegate.js';
-const callerIds = new WeakMap();
-function render(_args, value) {
-    return [{ type: 'text', text: JSON.stringify(value) }];
-}
+export { createTools } from "./tools.js";
+export { REQUIRED_PRESET_IDS, SPECIALIST_OUTPUT_SCHEMA, parsePresetYaml, loadPresetsFromDir, resolvePresetsDir, getPreset, catalogPrompt, catalogSectionText, isSpecialistScope, buildModeMachinePrompt, normalizeMode, } from './presets.js';
+export { DSH_AGENT_PLANE_TOOLS, executeDelegate, listKnownGlobalTools, resolveChildren, assertParallelGroupSize, parseParallelGroup, filterAllowlist, } from './delegate.js';
 function asSubagents(ctx) {
-    const raw = (ctx.get('subagents') ?? ctx.subagents);
+    const raw = ctx.get('subagents');
     if (!raw || typeof raw.start !== 'function')
         return undefined;
     return raw;
 }
-function callerAgentId(exec) {
-    const agent = exec.agent;
-    if (agent && typeof agent === 'object' && callerIds.has(agent)) {
-        return callerIds.get(agent);
-    }
-    if (agent && typeof agent === 'object') {
-        const rec = agent;
-        if (typeof rec.options?.neoAgentId === 'string')
-            return rec.options.neoAgentId;
-        if (typeof rec.label === 'string')
-            return rec.label;
-    }
-    return process.env.NEO_AGENT_ID || 'orchestrator';
+function knownGlobalTools(ctx, parent) {
+    const tools = (ctx.get('tools') ?? ctx.tools);
+    return listKnownGlobalTools(tools, parent);
 }
 export function apply(ctx) {
     const presets = loadPresetsFromDir(resolvePresetsDir());
     const workspaceDir = process.env.NEO_WORKSPACE || '/workspace';
-    const promptApi = ctx.systemPrompt;
+    const promptApi = ctx.get('systemPrompt');
     if (promptApi && typeof promptApi.section === 'function') {
         promptApi.section({
             name: 'neo:orchestrator',
             order: 50,
-            text: () => catalogPrompt(presets, process.env.NEO_MODE || 'thorough'),
+            text: (context) => catalogSectionText(context, presets, process.env.NEO_MODE || 'thorough'),
         });
     }
-    ctx.tools.register(defineTool({
-        name: 'delegate',
-        description: 'Spawn a named Neo specialist preset (persona + toolFilter + outputSchema). '
-            + 'Pass parallel_group to start N children and await all (explore×3, verifier×5, swarm streams). '
-            + 'Unknown agent_id is rejected. Size is capped by each preset max_parallel. '
-            + 'Children inherit the parent LLM provider/model. Prefer this over a generic subagent tool.',
-        parameters: {
-            agent_id: {
-                type: 'string',
-                required: true,
-                description: 'Preset id (orchestrator, planner, swarm, explore, recon, …).',
-            },
-            prompt: {
-                type: 'string',
-                required: true,
-                description: 'Complete standalone task for the child. Include scope, mode, and paths.',
-            },
-            parallel_group: {
-                type: 'array',
-                items: {
-                    type: 'object',
-                    additionalProperties: false,
-                    properties: {
-                        agent_id: { type: 'string', description: 'Defaults to the top-level agent_id.' },
-                        prompt: { type: 'string', description: 'Defaults to the top-level prompt.' },
-                    },
-                },
-                description: 'Start N children in parallel and await all. Size cannot exceed preset max_parallel.',
-            },
-        },
-        output: {
-            schema: {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                    ok: { type: 'boolean', required: true, const: true },
-                    backend: { type: 'string', required: true },
-                    results: {
-                        type: 'array',
-                        required: true,
-                        items: {
-                            type: 'object',
-                            additionalProperties: true,
-                            properties: {
-                                agent_id: { type: 'string', required: true },
-                                run_id: { type: 'string', required: true },
-                                backend: { type: 'string', required: true },
-                                artifact_path: { type: 'string', required: true },
-                                summary: { type: 'string', required: true },
-                                artifacts: { type: 'array', items: { type: 'string' }, required: true },
-                                findings_claimed: { type: 'array', items: { type: 'object' }, required: true },
-                                next_agent: { type: 'string', required: true },
-                                blockers: { type: 'array', items: { type: 'string' }, required: true },
-                            },
-                        },
-                    },
-                },
-            },
-            render,
-        },
-        async execute(args, exec) {
-            return executeDelegate(args, {
-                presets,
-                workspaceDir,
-                env: process.env,
-                signal: exec.signal,
-                parent: exec.agent,
-                callerAgentId: callerAgentId(exec),
-                subagents: asSubagents(ctx),
-                onSpawnedAgent: (agent, id) => {
-                    if (agent && typeof agent === 'object')
-                        callerIds.set(agent, id);
-                },
-            });
-        },
-    }));
+    for (const def of createTools({
+        presets,
+        workspaceDir,
+        env: process.env,
+        getSubagents: () => asSubagents(ctx),
+        getKnownGlobalTools: (parent) => knownGlobalTools(ctx, parent),
+    }))
+        ctx.tools.register(defineTool(def));
 }
