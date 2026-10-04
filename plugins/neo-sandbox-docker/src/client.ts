@@ -9,6 +9,7 @@ import {
 import { constants } from 'node:fs'
 import { resolve, dirname, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { requireTaskId, taskToken } from '../../neo-runtime/contracts.mjs'
 
 export type EnvMap = Record<string, string | undefined>
 
@@ -39,6 +40,7 @@ export type ClientOptions = {
   docker?: DockerLike
   env?: EnvMap
   signal?: AbortSignal
+  agent?: unknown
 }
 
 export const DEFAULT_SANDBOX_CONTAINER = 'neo-sandbox-1'
@@ -63,16 +65,8 @@ export function createDocker(opts: ClientOptions = {}): DockerLike {
   return {
     async exec(_container, spec, signal) {
       const env = opts.env ?? process.env
-      const task_id = env.NEO_TASK_ID,
-        task_token = env.NEO_TASK_TOKEN
-      if (
-        !task_id ||
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-          task_id || '',
-        ) ||
-        !task_token
-      )
-        throw new Error('task identity and capability required')
+      const task_id = requireTaskId(undefined, env, opts.agent)
+      const task_token = taskToken(env, opts.agent)
       const root = resolve(env.NEO_WORKSPACE || '/workspace', 'tasks', task_id)
       const files: Array<{ path: string; body_base64: string }> = []
       let total = 0

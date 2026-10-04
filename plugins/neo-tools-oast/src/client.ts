@@ -1,4 +1,4 @@
-import { requireTaskId } from '../../neo-runtime/contracts.mjs'
+import { requireTaskId, taskToken } from '../../neo-runtime/contracts.mjs'
 import {
   constants,
   createCipheriv,
@@ -31,6 +31,7 @@ export type ClientOptions = {
   fetch?: FetchLike
   env?: EnvMap
   signal?: AbortSignal
+  agent?: unknown
   store?: OastStore
   sleep?: SleepFn
   now?: () => number
@@ -296,15 +297,15 @@ export async function defaultSleep(
 
 async function authorizeOast(opts: ClientOptions): Promise<void> {
   const env = opts.env ?? process.env
-  const task_id = requireTaskId(undefined, env)
-  if (!env.NEO_TASK_TOKEN) throw new Error('OAST task credentials required')
+  const task_id = requireTaskId(undefined, env, opts.agent)
+  const task_token = taskToken(env, opts.agent)
   const result = await readJson(
     opts.fetch ?? (globalThis.fetch as FetchLike),
     `${env.NEO_BROKER_URL ?? 'http://broker:8091'}/oast/authorize`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ task_id, task_token: env.NEO_TASK_TOKEN }),
+      body: JSON.stringify({ task_id, task_token }),
       signal: opts.signal,
     },
   )
@@ -325,7 +326,7 @@ export async function registerOast(
     throw new Error('kind must be http or dns')
   }
   const env = opts.env ?? process.env
-  const taskId = requireTaskId(undefined, env)
+  const taskId = requireTaskId(undefined, env, opts.agent)
   const callbackDomain = env.INTERACTSH_CALLBACK_DOMAIN
   if (
     !callbackDomain ||
@@ -477,7 +478,7 @@ export async function pollOast(
   const store = opts.store ?? defaultStore
   const session = store.get(args.id)
   if (!session) throw new Error(`unknown oast id: ${args.id}`)
-  const taskId = requireTaskId(undefined, opts.env ?? process.env)
+  const taskId = requireTaskId(undefined, opts.env ?? process.env, opts.agent)
   if (session.taskId !== taskId)
     throw new Error('OAST session belongs to another task')
   if ((opts.now ?? Date.now)() - session.createdAt >= TTL) {
@@ -543,7 +544,7 @@ export async function cleanupOast(
 ): Promise<void> {
   const store = opts.store ?? defaultStore
   const env = opts.env ?? process.env
-  const taskId = requireTaskId(undefined, env)
+  const taskId = requireTaskId(undefined, env, opts.agent)
   const now = (opts.now ?? Date.now)()
   for (const [id, session] of store) {
     if (all ? session.taskId !== taskId : now - session.createdAt < TTL)

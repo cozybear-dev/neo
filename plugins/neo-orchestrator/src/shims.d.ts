@@ -47,6 +47,7 @@ declare module '@deepseek-ai/cordis' {
       schemas?: (scope?: unknown) => Array<{ name?: string }>
     }
     get(name: string): unknown
+    on?(name: string, listener: (...args: any[]) => unknown): unknown
     subagents?: SubagentsLike
     systemPrompt?: {
       section: (opts: {

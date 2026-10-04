@@ -101,7 +101,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
               typeof args.network === 'string' ? args.network : undefined,
             id: typeof args.id === 'string' ? args.id : undefined,
           },
-          { ...options, signal: exec.signal },
+          { ...options, signal: exec.signal, agent: exec.agent },
         )
       },
     },
@@ -131,7 +131,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
       async execute(args, exec) {
         return deployDown(
           { id: String(args.id ?? '') },
-          { ...options, signal: exec.signal },
+          { ...options, signal: exec.signal, agent: exec.agent },
         )
       },
     },

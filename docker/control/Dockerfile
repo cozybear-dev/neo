@@ -16,6 +16,9 @@ COPY control/src ./src
 RUN npm run build \
   && npm prune --omit=dev
 
+COPY docker/control/entrypoint.sh /entrypoint.sh
+RUN chmod 755 /entrypoint.sh
+
 ENV PORT=8090
 EXPOSE 8090
 
@@ -23,4 +26,4 @@ HEALTHCHECK --interval=5s --timeout=5s --retries=10 --start-period=10s \
   CMD curl -f http://localhost:8090/readyz || exit 1
 
 USER node
-CMD ["node", "dist/server.js"]
+ENTRYPOINT ["/entrypoint.sh"]

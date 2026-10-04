@@ -1,6 +1,7 @@
 import { parse } from 'yaml'
 import { readFile, realpath } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
+import { requireTaskId, taskToken } from '../../neo-runtime/contracts.mjs'
 
 /** Only this compose/docker network is allowed for lab deploys. */
 export const ALLOWED_NETWORK = 'targets'
@@ -34,6 +35,7 @@ export type ClientOptions = {
   fs?: FsLike
   env?: EnvMap
   signal?: AbortSignal
+  agent?: unknown
   now?: () => Date
   randomId?: () => string
 }
@@ -123,8 +125,8 @@ async function broker(
   opts: ClientOptions,
 ): Promise<any> {
   const env = opts.env ?? process.env
-  if (!env.NEO_TASK_ID || !env.NEO_TASK_TOKEN)
-    throw new Error('task identity and capability required')
+  const task_id = requireTaskId(undefined, env, opts.agent)
+  const task_token = taskToken(env, opts.agent)
   const response = await fetch(
     `${env.NEO_BROKER_URL || 'http://broker:8091'}${path}`,
     {
@@ -132,8 +134,8 @@ async function broker(
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         ...body,
-        task_id: env.NEO_TASK_ID,
-        task_token: env.NEO_TASK_TOKEN,
+        task_id,
+        task_token,
       }),
       signal: opts.signal,
     },
@@ -167,7 +169,7 @@ export async function deployUp(
     const root = resolve(
       env.NEO_WORKSPACE || '/workspace',
       'tasks',
-      env.NEO_TASK_ID || '',
+      requireTaskId(undefined, env, opts.agent),
     )
     const file = resolve(root, args.ref)
     if (!file.startsWith(root + sep))

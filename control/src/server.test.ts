@@ -19,13 +19,25 @@ test('scope is task-granted, ceiling bounded, deny preferred and CIDR aware', ()
     }).allowed,
     true,
   )
-  assert.equal(
+  assert.deepEqual(
     checkScope({
       target: 'other.test',
       envAllowlist: ['other.test'],
       taskAllowlist: [],
-    }).allowed,
-    false,
+    }),
+    {
+      allowed: false,
+      matched: '',
+      reason: 'not in the task allowlist',
+    },
+  )
+  assert.equal(
+    checkScope({
+      target: 'a.example.com',
+      envAllowlist: ['other.test'],
+      taskAllowlist: ['a.example.com'],
+    }).reason,
+    'outside NEO_ALLOWLIST',
   )
   assert.equal(
     checkScope({
@@ -43,6 +55,102 @@ test('scope is task-granted, ceiling bounded, deny preferred and CIDR aware', ()
       taskDenylist: ['10.0.1.0/24'],
     }).allowed,
     false,
+  )
+})
+test('chat session copies NEO_ALLOWLIST and NEO_MODE_DEFAULT', async () => {
+  assert.ok(databaseUrl, 'TEST_DATABASE_URL required')
+  const pool = createPool(databaseUrl!)
+  const opener = 'session-opener-token-32characters'
+  const app = await buildApp({
+    pool,
+    adminToken: admin,
+    brokerToken: broker,
+    logger: false,
+    allowlistEnv: 'huntandhackett.com,*.huntandhackett.com',
+    sessionOpenToken: opener,
+    modeDefault: 'thorough',
+  })
+  const empty = await buildApp({
+    pool,
+    adminToken: admin,
+    brokerToken: broker,
+    logger: false,
+    allowlistEnv: '',
+    sessionOpenToken: opener,
+    modeDefault: 'fast',
+  })
+  try {
+    const denied = await app.inject({
+      method: 'POST',
+      url: '/session',
+      headers: { authorization: `Bearer ${admin}` },
+      payload: { objective: 'pentest huntandhackett.com' },
+    })
+    assert.equal(denied.statusCode, 403)
+    const extra = await app.inject({
+      method: 'POST',
+      url: '/session',
+      headers: { authorization: `Bearer ${opener}` },
+      payload: {
+        objective: 'pentest huntandhackett.com',
+        allowlist: ['evil.test'],
+      },
+    })
+    assert.equal(extra.statusCode, 400)
+    const blank = await app.inject({
+      method: 'POST',
+      url: '/session',
+      headers: { authorization: `Bearer ${opener}` },
+      payload: { objective: ' ' },
+    })
+    assert.equal(blank.statusCode, 400)
+    const opened = await app.inject({
+      method: 'POST',
+      url: '/session',
+      headers: { authorization: `Bearer ${opener}` },
+      payload: { objective: 'pentest huntandhackett.com' },
+    })
+    assert.equal(opened.statusCode, 201)
+    const body = opened.json()
+    assert.equal(body.mode, 'thorough')
+    assert.equal(body.objective, 'pentest huntandhackett.com')
+    assert.deepEqual(body.allowlist, [
+      'huntandhackett.com',
+      '*.huntandhackett.com',
+    ])
+    assert.equal(body.denylist.length, 0)
+    assert.equal(typeof body.task_token, 'string')
+    const missing = await empty.inject({
+      method: 'POST',
+      url: '/session',
+      headers: { authorization: `Bearer ${opener}` },
+      payload: { objective: 'pentest huntandhackett.com' },
+    })
+    assert.equal(missing.statusCode, 400)
+    assert.match(missing.json().error, /NEO_ALLOWLIST is empty/)
+  } finally {
+    await app.close()
+    await empty.close()
+    await pool.end()
+  }
+})
+test('migrate reports a rejected database password', async () => {
+  const error = Object.assign(new Error('password authentication failed'), {
+    code: '28P01',
+  })
+  await assert.rejects(
+    () =>
+      buildApp({
+        pool: {
+          connect: async () => {
+            throw error
+          },
+        } as any,
+        adminToken: admin,
+        brokerToken: broker,
+        logger: false,
+      }),
+    /pgdata volume still has a different role password/,
   )
 })
 test('child registration rechecks a parent finished after its initial identity lookup', async () => {

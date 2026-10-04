@@ -1,4 +1,6 @@
-# Neo agents → DSH presets
+# Neo agents
+
+Each row is a specialist the harness can route to. Preset files live in `presets/`. How a task reaches them is in [Assessment workflow](workflow.md).
 
 | Neo agent | Preset id | Notes |
 |-----------|-----------|-------|

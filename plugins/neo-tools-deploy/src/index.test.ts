@@ -44,7 +44,10 @@ test('broker receives owned deployment and cleanup failures propagate', async ()
     )
   }
   try {
-    const env = { NEO_TASK_ID: 'task', NEO_TASK_TOKEN: 'capability' }
+    const env = {
+      NEO_TASK_ID: '11111111-1111-4111-8111-111111111111',
+      NEO_TASK_TOKEN: 'capability',
+    }
     const r = await deployUp(
       { source: 'image', ref: 'fixture:v1', id: 'lab', port: 3000 },
       { env },

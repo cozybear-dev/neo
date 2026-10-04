@@ -57,7 +57,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
       async execute(args, exec) {
         return searchTraffic(
           { query: String(args.query ?? '') },
-          { ...options, signal: exec.signal },
+          { ...options, signal: exec.signal, agent: exec.agent },
         )
       },
     },
@@ -101,7 +101,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
                 ? (args.edits as Record<string, unknown>)
                 : undefined,
           },
-          { ...options, signal: exec.signal },
+          { ...options, signal: exec.signal, agent: exec.agent },
         )
       },
     },

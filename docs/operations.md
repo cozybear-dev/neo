@@ -1,5 +1,7 @@
 # Operations and capability limits
 
+Day-to-day limits on workers, deploys, and the browser are in [Execution and lab limits](execution.md). How a task moves from plan to findings is in [Assessment workflow](workflow.md).
+
 ## Services and trust boundaries
 
 DSH runs as `node`; workers run as an unprivileged user. The broker alone administers Docker. The browser is on an internal link with DSH; all supported HTTP page requests are intercepted and fetched by the broker. Worker lab networks are internal and task-owned. Operator and broker credentials never enter worker environments or DSH settings.
@@ -10,7 +12,9 @@ Only one worker operates on a task's artifact staging area at a time. A concurre
 
 ## Credentials and existing volumes
 
-The operator creates tasks through `docker compose exec -T control node dist/operator.js create`. The returned task token is displayed only at creation; store it privately. Keep `.env` and task-token files mode `0600`. Model settings and temporary renderer files also use owner-only permissions; temporary exports are deleted before DSH starts.
+Postgres stores the `neo` role password in the `pgdata` volume. Each start sets that password from `NEO_DB_PASSWORD`, and the existing database stays in place when the secret changes. `pg_dump` and `psql` without `-h` use the local trust socket.
+
+Compose stores a chat-opener secret in the `task-state` volume. The first message in a chat opens a task whose allowlist is `NEO_ALLOWLIST`. A hand-made task still goes through `docker compose exec -T control node dist/operator.js create`, as described in [Assessment workflow](workflow.md). The returned task token is displayed only at creation; store it privately. Keep `.env` and task-token files mode `0600`. Model settings and temporary renderer files also use owner-only permissions; temporary exports are deleted before DSH starts.
 
 Existing root-owned `dsh-home` or workspace volumes may need a one-time ownership migration before using the new non-root image. Stop DSH, back up the volumes, then change only those volumes to UID/GID 1000 using a maintenance container. Do not reset or delete existing volumes to fix ownership. Legacy tasks without credentials cannot be adopted by an agent; create an explicitly authorized new task and import reviewed evidence as needed.
 
@@ -28,7 +32,7 @@ docker compose exec -T control node -e "fetch('http://localhost:8090/readyz').th
 
 ## Backup and recovery
 
-Stop DSH and ongoing workers before a consistent assessment snapshot. Back up the database and the `workspace`, `dsh-home`, and `broker-state` volumes together. Backups contain credentials and raw evidence; keep them private and encrypted when stored off host.
+Stop DSH and ongoing workers before a consistent assessment snapshot. Back up the database and the `workspace`, `dsh-home`, `broker-state`, and `task-state` volumes together. `task-state` holds the chat-opener secret. Backups contain credentials and raw evidence; keep them private and encrypted when stored off host.
 
 ```bash
 umask 077

@@ -15,6 +15,7 @@ import {
   DSH_AGENT_PLANE_TOOLS,
   assertParallelGroupSize,
   executeDelegate,
+  filterAllowlist,
   listKnownGlobalTools,
   resolveChildren,
 } from './delegate.ts'
@@ -278,6 +279,40 @@ describe('delegate authorization and lifecycle', () => {
       )
       assert.equal(statSync(result.results[0].artifact_path).mode & 0o007, 0)
     }))
+  it('gives nested roles their preset tools even when callers cannot use them', async () =>
+    fixture(async () => {
+      for (const [caller, child, capability] of [
+        ['planner', 'explore', 'sandbox_exec'],
+        ['swarm', 'recon', 'sandbox_exec'],
+        ['orchestrator', 'planner', 'write'],
+        ['orchestrator', 'swarm', 'delegate'],
+      ]) {
+        const callerTools = getPreset(presets, caller).tool_allowlist
+        const childTools = getPreset(presets, child).tool_allowlist
+        const result = await executeDelegate(
+          { agent_id: child, prompt: 'collect permitted evidence' },
+          {
+            presets, workspaceDir: workspace(), env,
+            parent: parent(), callerAgentId: caller,
+            knownGlobalTools: [...childTools, ...DSH_AGENT_PLANE_TOOLS],
+            parentVisibleTools: callerTools,
+            subagents: {
+              start: async (_, request) => {
+                const allow = (request.toolFilter as any).allow as string[]
+                assert.ok(allow.includes(capability), `${caller} → ${child} lost ${capability}`)
+                assert.equal(allow.includes('bash'), false)
+                assert.ok(allow.every(name => childTools.includes(name)))
+                return {
+                  result: Promise.resolve({ structured: { summary: 'done', artifacts: [] }, stopReason: 'completed' }),
+                  dispose: async () => {},
+                }
+              },
+            },
+          },
+        )
+        assert.equal(result.results[0].summary, 'done')
+      }
+    }))
   it('settles child failures and preserves sibling completion evidence', async () =>
     fixture(async () => {
       let count = 0
@@ -460,5 +495,17 @@ describe('listKnownGlobalTools', () => {
     for (const name of DSH_AGENT_PLANE_TOOLS) {
       assert.ok(names.includes(name), `missing agent-plane tool ${name}`)
     }
+  })
+})
+
+describe('child tool catalog', () => {
+  it('unions catalogs while still dropping unknown names', () => {
+    assert.deepEqual(
+      filterAllowlist(['read', 'sandbox_exec', 'not_registered'], ['sandbox_exec'], ['read']),
+      ['read', 'sandbox_exec'],
+    )
+  })
+  it('includes list_dir supplied by the agent preset plane', () => {
+    assert.ok(listKnownGlobalTools({ schemas: () => [] })?.includes('list_dir'))
   })
 })

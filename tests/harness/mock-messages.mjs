@@ -53,88 +53,71 @@ export function startMockMessages() {
       return
     }
     requests.push(body)
-    // A correct parent → child → settle → parent reply is 3 or 4 requests.
-    // Task memory is injected as next-step input after the child starts, and
-    // a concluding structured_output does not drop that queued message, so
-    // the child may take one more step. Past this cap the script is looping.
-    if (requests.length > 12) {
-      res.writeHead(500, { 'content-type': 'application/json' })
-      res.end(
-        JSON.stringify({
-          error: {
-            message: 'too many requests',
-            type: 'mock_error',
-            code: 'loop',
-          },
-        }),
-      )
-      return
+    if (requests.length > 80) {
+      res.writeHead(500); res.end('mock loop'); return
     }
     const names = toolNames(body)
     const serialized = JSON.stringify(body)
+    const child = names.has('structured_output')
+    const marker = child
+      ? ['DIRECT', 'PLANNER', 'NESTED', 'SWARM', 'STREAM_A', 'STREAM_B']
+          .find((id) => JSON.stringify(body.messages?.find((m) => m.role === 'user') ?? body).includes(`HARNESS_ROLE_${id}`))
+      : 'ROOT'
+    const id = marker ?? 'UNKNOWN'
+    const prior = new Set((body.messages ?? []).flatMap((m) => m.content ?? [])
+      .filter((c) => c.type === 'tool_use').map((c) => c.id))
+    const call = (step, name, args) => toolCall(res, `${id}-${step}`, name, JSON.stringify(args))
+    const did = (step) => prior.has(`${id}-${step}`)
+    branches[id] = (branches[id] ?? 0) + 1
     openSse(res)
     messageStart(res)
-    // The follow-up still lists structured_output and still contains
-    // HARNESS_CHILD_OK from the prior tool call, so this check is first.
     if (serialized.includes('Structured output recorded')) {
-      branches.child_settled += 1
-      textReply(res, 'child settled')
-      return
+      branches.child_settled += 1; textReply(res, 'child settled'); return
     }
-    if (names.has('structured_output')) {
-      branches.structured_output += 1
+    if (child) {
+      const required = id === 'PLANNER' || id === 'SWARM'
+        ? ['delegate', 'read', 'structured_output']
+        : ['sandbox_exec', 'read', 'write', 'structured_output']
+      const missing = required.filter((n) => !names.has(n))
+      if (missing.length) {
+        branches.missing = [...(branches.missing ?? []), { id, missing, tools: [...names] }]
+        textReply(res, `HARNESS_MISSING_TOOLS ${id}: ${missing.join(', ')}`); return
+      }
+      if (id === 'PLANNER' && !did('nested')) {
+        call('nested', 'delegate', { agent_id: 'explore', prompt: 'HARNESS_ROLE_NESTED Execute fixture work and return structured output.' }); return
+      }
+      if (id === 'SWARM' && !did('parallel')) {
+        call('parallel', 'delegate', { agent_id: 'recon', prompt: 'fixture streams', parallel_group: [
+          { agent_id: 'recon', prompt: 'HARNESS_ROLE_STREAM_A Execute fixture work and return structured output.' },
+          { agent_id: 'recon', prompt: 'HARNESS_ROLE_STREAM_B Execute fixture work and return structured output.' },
+        ] }); return
+      }
+      if (id !== 'PLANNER' && id !== 'SWARM') {
+        if (!did('write')) { call('write', 'write', { file_path: `${id}.txt`, content: `HARNESS_FILE_${id}` }); return }
+        if (!did('read')) { call('read', 'read', { file_path: `${id}.txt` }); return }
+        if (!did('exec')) { call('exec', 'sandbox_exec', { command: `cat ${id}.txt; printf HARNESS_EXEC_${id} > ${id}.exec.txt` }); return }
+        if (!did('artifact')) { call('artifact', 'read', { file_path: `${id}.exec.txt` }); return }
+      }
+      const ok = id === 'PLANNER' ? serialized.includes('HARNESS_DONE_NESTED')
+        : id === 'SWARM' ? serialized.includes('HARNESS_DONE_STREAM_A') && serialized.includes('HARNESS_DONE_STREAM_B')
+        : serialized.includes(`HARNESS_FILE_${id}`) && serialized.includes(`HARNESS_EXEC_${id}`)
+      // Only tool results establish success: the mock prompt and issued calls also contain markers.
+      const results = JSON.stringify((body.messages ?? []).flatMap((m) => m.content ?? []).filter((c) => c.type === 'tool_result'))
+      const useful = (id === 'PLANNER' || id === 'SWARM') ? ok
+        : results.includes(`HARNESS_FILE_${id}`) && results.includes(`HARNESS_EXEC_${id}`) && !results.includes('Neo blocks')
+      branches[`verified_${id}`] = useful
       servedStructuredOutput = true
-      toolCall(
-        res,
-        'mock-call-child',
-        'structured_output',
-        JSON.stringify({
-          summary: 'HARNESS_CHILD_OK',
-          artifacts: [],
-        }),
-      )
-      return
+      call('output', 'structured_output', { summary: useful ? `HARNESS_DONE_${id}` : `HARNESS_FAILED_${id}`, artifacts: [] }); return
     }
-    if (names.has('delegate') && branches.shell_guard === 0) {
-      branches.shell_guard += 1
-      toolCall(
-        res,
-        'mock-shell-guard',
-        'bash',
-        JSON.stringify({ command: 'echo GUARD_MUST_BLOCK_THIS' }),
-      )
-      return
+    if (!did('shell')) { branches.shell_guard++; call('shell', 'bash', { command: 'echo GUARD_MUST_BLOCK_THIS' }); return }
+    if (!did('file')) { branches.file_guard++; call('file', 'read', { file_path: '/etc/passwd' }); return }
+    for (const [step, agent_id, role] of [['direct', 'explore', 'DIRECT'], ['planner', 'planner', 'PLANNER'], ['swarm', 'swarm', 'SWARM']]) {
+      if (!did(step)) { call(step, 'delegate', { agent_id, prompt: `HARNESS_ROLE_${role} Execute fixture work and return structured output.` }); return }
     }
-    if (names.has('delegate') && branches.file_guard === 0) {
-      branches.file_guard += 1
-      toolCall(
-        res,
-        'mock-file-guard',
-        'read',
-        JSON.stringify({ file_path: '/etc/passwd' }),
-      )
-      return
-    }
-    if (names.has('delegate') && branches.delegate === 0) {
-      branches.delegate += 1
-      toolCall(
-        res,
-        'mock-call-parent',
-        'delegate',
-        JSON.stringify({
-          agent_id: 'explore',
-          prompt: 'Return structured output only.',
-        }),
-      )
-      return
-    }
-    if (serialized.includes('HARNESS_CHILD_OK')) {
-      branches.parent_ok += 1
-      textReply(res, 'parent received HARNESS_CHILD_OK')
-      return
-    }
-    branches.parent_failure += 1
-    textReply(res, 'parent received failure')
+    const success = ['DIRECT', 'PLANNER', 'SWARM'].every((id) => serialized.includes(`HARNESS_DONE_${id}`))
+    branches.parent_ok += Number(success)
+    branches.parent_failure += Number(!success)
+    textReply(res, success ? 'parent received HARNESS_WORKFLOW_OK' : 'parent received failure')
   })
 
   return new Promise((resolve, reject) => {

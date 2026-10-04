@@ -37,6 +37,7 @@ async function ready(url) {
 }
 const brokerImage = 'neo-review-broker:fixture'
 docker('info')
+run('bash', ['docker/postgres/sync-password.test.sh'])
 run('docker', [
   'build',
   '-f',

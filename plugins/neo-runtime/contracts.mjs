@@ -1,10 +1,15 @@
 export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+function present(value) {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed || undefined
+}
 export function resolveTaskId(arg, env = process.env, agent) {
   const binding =
-    env.NEO_TASK_ID ??
-    agent?.options?.neoTaskId ??
-    agent?.parent?.options?.neoTaskId
+    present(env.NEO_TASK_ID) ??
+    present(agent?.options?.neoTaskId) ??
+    present(agent?.parent?.options?.neoTaskId)
   if (arg !== undefined && !UUID_RE.test(arg))
     throw new Error('invalid explicit task_id')
   if (binding !== undefined && !UUID_RE.test(binding))
@@ -15,16 +20,23 @@ export function resolveTaskId(arg, env = process.env, agent) {
 }
 export function requireTaskId(arg, env = process.env, agent) {
   const id = resolveTaskId(arg, env, agent)
-  if (!id)
-    throw new Error(
-      'authorized task identity required; start a task with the operator CLI',
-    )
+  if (!id) throw new Error('authorized task identity required')
   return id
 }
+export function taskToken(env = process.env, agent) {
+  const envId = present(env.NEO_TASK_ID)
+  const envToken = present(env.NEO_TASK_TOKEN)
+  const token =
+    (envId && envToken ? envToken : undefined) ??
+    present(agent?.options?.neoTaskToken) ??
+    present(agent?.parent?.options?.neoTaskToken) ??
+    envToken
+  if (!token) throw new Error('NEO_TASK_TOKEN is required')
+  return token
+}
 export function taskHeaders(env = process.env, agent) {
-  if (!env.NEO_TASK_TOKEN) throw new Error('NEO_TASK_TOKEN is required')
   return {
-    authorization: `Bearer ${env.NEO_TASK_TOKEN}`,
+    authorization: `Bearer ${taskToken(env, agent)}`,
     ...((agent?.options?.neoRunToken ?? env.NEO_RUN_TOKEN)
       ? { 'x-neo-run-token': agent?.options?.neoRunToken ?? env.NEO_RUN_TOKEN }
       : {}),
@@ -73,7 +85,7 @@ export async function ensureRunIdentity(
       `${controlUrl(env)}/tasks/${requireTaskId(undefined, env, agent)}/runs`,
       {
         method: 'POST',
-        headers: { ...taskHeaders(env), 'content-type': 'application/json' },
+        headers: { ...taskHeaders(env, agent), 'content-type': 'application/json' },
         body: JSON.stringify({ role: 'orchestrator' }),
         signal,
       },

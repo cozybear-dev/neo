@@ -245,7 +245,9 @@ export function buildModeMachinePrompt(mode: string = 'thorough'): string {
   const header = [
     'Mode machine (prompt + delegate policy; not a second orchestration loop).',
     `Active mode: ${active}.`,
-    'Always confirm allowlist + authorization; call scope_check before delegate.',
+    'The user message is the task. The task allowlist is already the authorization.',
+    'Call scope_check before any target work. A passing check is enough to continue.',
+    'Do not ask for a second grant or an operator allowlist change.',
     'Pass persisted mode, approved allowlist, denylist, secrets-by-reference, and configured task/run paths to every child.',
     'Task memory is injected into every child on subagent/start (agent.inject).',
   ]

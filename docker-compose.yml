@@ -39,6 +39,7 @@ services:
       HACKERONE_API_TOKEN: ${HACKERONE_API_TOKEN:-}
       CONTROL_URL: ${CONTROL_URL:-http://control:8090}
       NEO_TASK_ID: ${NEO_TASK_ID:-}
+      NEO_MODE_DEFAULT: ${NEO_MODE_DEFAULT:-thorough}
       INTERACTSH_URL: ${INTERACTSH_URL:-http://interactsh:80}
       INTERACTSH_TOKEN: ${INTERACTSH_TOKEN:?set independent OAST token}
       INTERACTSH_CALLBACK_DOMAIN: ${INTERACTSH_CALLBACK_DOMAIN:-oast.neo.internal}
@@ -57,6 +58,7 @@ services:
     volumes:
       - dsh-home:/home/node/.dsh
       - workspace:/workspace
+      - task-state:/run/neo-task:ro
       # Optional subscription CLI credentials (read-only). Uncomment the matching
       # mount after the host directory exists — Compose creates a missing bind
       # source as an empty directory.
@@ -144,7 +146,9 @@ services:
       - targets
 
   postgres:
-    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    build:
+      context: ./docker/postgres
+    image: neo-postgres:local
     environment:
       POSTGRES_USER: neo
       POSTGRES_PASSWORD: ${NEO_DB_PASSWORD:?set database password}
@@ -154,10 +158,11 @@ services:
     networks:
       - control
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U neo -d neo"]
+      test: ["CMD-SHELL", "test -f /var/run/neo-db-password-ready && pg_isready -U neo -d neo"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 24
+      start_period: 10s
 
   control:
     build:
@@ -167,8 +172,13 @@ services:
       DATABASE_URL: postgres://neo:${NEO_DB_PASSWORD:?set database password}@postgres:5432/neo
       NEO_CONTROL_ADMIN_TOKEN: ${NEO_CONTROL_ADMIN_TOKEN:?set operator credential}
       NEO_CONTROL_BROKER_TOKEN: ${NEO_CONTROL_BROKER_TOKEN:?set broker credential}
-      NEO_ALLOWLIST: ${NEO_ALLOWLIST:-localhost,127.0.0.1,*.lab.internal,juice-shop}
+      NEO_ALLOWLIST: ${NEO_ALLOWLIST:-localhost,127.0.0.1,*.lab.internal,juice-shop,lab-app}
+      NEO_MODE_DEFAULT: ${NEO_MODE_DEFAULT:-thorough}
+      NEO_SESSION_OPEN_FILE: /state/session-open.token
       PORT: "8090"
+    user: "0:0"
+    volumes:
+      - task-state:/state
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/readyz"]
       interval: 5s
@@ -196,6 +206,7 @@ volumes:
   dsh-home:
   broker-state:
     name: neo_broker_state
+  task-state:
 
 networks:
   browser-link:

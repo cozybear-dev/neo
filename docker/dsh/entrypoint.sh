@@ -78,7 +78,8 @@ fi
 # Redirect, not eval "$(…)", so a renderer failure trips `set -e` (bash does not
 # inherit errexit into command substitution without inherit_errexit).
 ENV_FILE="$(mktemp "${DSH_HOME}/.neo-llm.XXXXXX")"
-trap 'rm -f "${ENV_FILE}"' EXIT
+TASK_ENV=""
+trap 'rm -f "${ENV_FILE}" ${TASK_ENV:+"$TASK_ENV"}' EXIT
 chmod 600 "${ENV_FILE}"
 node "${RENDERER}" --dsh-home "${DSH_HOME}" --export > "${ENV_FILE}"
 # shellcheck disable=SC1090
@@ -149,18 +150,39 @@ if [[ "${1:-}" == "dsh" ]]; then
   fi
 fi
 
-# Each instance is bound to an operator-created task and an isolated workspace.
+# The UI starts with no task. A typed message opens one. An explicit id and
+# token bind every chat to a hand-made task and select its stored mode.
 if [[ "${1:-}" == "dsh" ]]; then
-  if [[ ! "${NEO_TASK_ID:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] || [[ -z "${NEO_TASK_TOKEN:-}" ]]; then
-    echo "neo: set NEO_TASK_ID and NEO_TASK_TOKEN from the operator task-create command" >&2
+  export NEO_WORKSPACE_BASE="${NEO_WORKSPACE_BASE:-/workspace}"
+  neo_open_file="${NEO_SESSION_OPEN_FILE:-/run/neo-task/session-open.token}"
+  if [[ -z "${NEO_SESSION_OPEN_TOKEN:-}" && -f "${neo_open_file}" ]]; then
+    NEO_SESSION_OPEN_TOKEN="$(tr -d '[:space:]' < "${neo_open_file}")"
+    export NEO_SESSION_OPEN_TOKEN
+  fi
+  if [[ -n "${NEO_TASK_ID:-}" || -n "${NEO_TASK_TOKEN:-}" ]]; then
+    if [[ ! "${NEO_TASK_ID:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] || [[ -z "${NEO_TASK_TOKEN:-}" ]]; then
+      echo "neo: set both NEO_TASK_ID and NEO_TASK_TOKEN, or leave both empty." >&2
+      exit 1
+    fi
+    NEO_MODE="$(node /opt/neo/docker/dsh/resolve-task.mjs)"
+    export NEO_MODE
+    export NEO_WORKSPACE="${NEO_WORKSPACE_BASE}/tasks/${NEO_TASK_ID,,}"
+  else
+    # Compose injects blank ids from an empty .env. A blank string is not a
+    # task, and resolveTaskId would reject it on every tool call.
+    unset NEO_MODE NEO_TASK_ID NEO_TASK_TOKEN
+    export NEO_WORKSPACE="${NEO_WORKSPACE_BASE}"
+  fi
+  mkdir -p "${NEO_WORKSPACE}"
+  # The volume mount is often root-owned. chmod on that mount fails for node
+  # even when the directory is already writable. Task directories we create
+  # are owned by this user and stay group-readable without world access.
+  if [[ "$(stat -c %u "${NEO_WORKSPACE}")" == "$(id -u)" ]]; then
+    chmod 750 "${NEO_WORKSPACE}"
+  elif [[ ! -w "${NEO_WORKSPACE}" ]]; then
+    echo "neo: ${NEO_WORKSPACE} is not writable by uid $(id -u)." >&2
     exit 1
   fi
-  export NEO_WORKSPACE_BASE="${NEO_WORKSPACE_BASE:-/workspace}"
-  NEO_MODE="$(node /opt/neo/docker/dsh/resolve-task.mjs)"
-  export NEO_MODE
-  export NEO_WORKSPACE="${NEO_WORKSPACE_BASE}/tasks/${NEO_TASK_ID,,}"
-  mkdir -p "${NEO_WORKSPACE}"
-  chmod 750 "${NEO_WORKSPACE}"
   cd "${NEO_WORKSPACE}"
 fi
 exec "$@"

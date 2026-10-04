@@ -1,6 +1,7 @@
 import {
   resolveTaskId as boundTaskId,
   taskHeaders,
+  taskToken,
 } from '../../neo-runtime/contracts.mjs'
 import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir, writeFile, open } from 'node:fs/promises'
@@ -247,7 +248,7 @@ export async function assertInScope(
   if (taskId) payload.task_id = taskId
   const res = await fetchImpl(`${control}/scope/check`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...taskHeaders(env) },
+    headers: { 'content-type': 'application/json', ...taskHeaders(env, opts.agent) },
     body: JSON.stringify(payload),
     signal: opts.signal,
   })
@@ -534,8 +535,8 @@ export async function connectCdp(
       try {
         const env = opts.env ?? process.env
         const id = resolveTaskId(undefined, env, opts.agent)
-        if (!id || !env.NEO_TASK_TOKEN)
-          throw new Error('task credentials required')
+        const task_token = taskToken(env, opts.agent)
+        if (!id) throw new Error('task credentials required')
         const res = await fetchImpl(
           `${env.NEO_BROKER_URL ?? 'http://broker:8091'}/request`,
           {
@@ -547,7 +548,7 @@ export async function connectCdp(
             ]),
             body: JSON.stringify({
               task_id: id,
-              task_token: env.NEO_TASK_TOKEN,
+              task_token,
               capability: 'browser',
               url: request.url,
               method: request.method,

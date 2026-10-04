@@ -1,4 +1,4 @@
-import { requireTaskId } from '../../neo-runtime/contracts.mjs'
+import { requireTaskId, taskToken } from '../../neo-runtime/contracts.mjs'
 import { appendFile, mkdir, readFile, writeFile, open } from 'node:fs/promises'
 
 export type EnvMap = Record<string, string | undefined>
@@ -48,6 +48,7 @@ export type ClientOptions = {
   fs?: FsLike
   env?: EnvMap
   signal?: AbortSignal
+  agent?: unknown
 }
 
 export const DEFAULT_TRAFFIC_PATH = '/workspace/traffic/http.jsonl'
@@ -79,7 +80,7 @@ export function trafficPath(opts: ClientOptions = {}): string {
   const env = opts.env ?? process.env
   return (
     opts.trafficPath ??
-    `${env.NEO_WORKSPACE_BASE ?? '/workspace'}/tasks/${requireTaskId(undefined, env)}/traffic/http.jsonl`
+    `${env.NEO_WORKSPACE_BASE ?? '/workspace'}/tasks/${requireTaskId(undefined, env, opts.agent)}/traffic/http.jsonl`
   )
 }
 
@@ -264,8 +265,8 @@ export async function replayTraffic(
 
   const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
   const env = opts.env ?? process.env
-  const task_id = requireTaskId(undefined, env)
-  if (!env.NEO_TASK_TOKEN) throw new Error('task credentials required')
+  const task_id = requireTaskId(undefined, env, opts.agent)
+  const task_token = taskToken(env, opts.agent)
   const canonical = new URL(url)
   if (
     !['http:', 'https:'].includes(canonical.protocol) ||
@@ -282,7 +283,7 @@ export async function replayTraffic(
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         task_id,
-        task_token: env.NEO_TASK_TOKEN,
+        task_token,
         capability: 'traffic',
         url: canonical.href,
         method,

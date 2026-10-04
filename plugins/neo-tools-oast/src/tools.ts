@@ -70,7 +70,10 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         if (args.kind !== 'dns' && args.kind !== 'http')
           throw new Error('kind must be http or dns')
         const kind = args.kind
-        return registerOast({ kind }, { ...options, signal: exec.signal })
+        return registerOast(
+          { kind },
+          { ...options, signal: exec.signal, agent: exec.agent },
+        )
       },
     },
     {
@@ -102,7 +105,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
                 ? args.wait_seconds
                 : undefined,
           },
-          { ...options, signal: exec.signal },
+          { ...options, signal: exec.signal, agent: exec.agent },
         )
       },
     },

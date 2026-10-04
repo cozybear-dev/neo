@@ -440,7 +440,7 @@ describe('Neo tool contract (pin 5badb150)', () => {
   it('sandbox_exec rejects missing task credentials before submission', async () => {
     const sandbox = byName(sandboxTools({ env: {} }), 'sandbox_exec')
     await assert.rejects(
-      () => sandbox.execute({ command: 'true' }, exec),
+      () => sandbox.execute({ command: 'true' }, { signal: exec.signal }),
       /identity/,
     )
   })

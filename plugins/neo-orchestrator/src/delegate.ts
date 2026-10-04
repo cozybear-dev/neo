@@ -86,7 +86,7 @@ export interface DelegateOptions {
   knownGlobalTools?: Iterable<string>
   /**
    * Parent-visible tool names (e.g. tools.schemas(parent) ∪ agent-plane builtins).
-   * When non-empty, filterAllowlist uses this instead of the plugin-only known set.
+   * Used together with the global catalog, never as a child capability ceiling.
    */
   parentVisibleTools?: Iterable<string>
 }
@@ -100,6 +100,7 @@ const JUDGE_ONLY_CHILD = 'verifier'
 export const DSH_AGENT_PLANE_TOOLS = [
   'bash',
   'read',
+  'list_dir',
   'write',
   'edit',
   'glob',
@@ -204,25 +205,19 @@ export function assertParallelGroupSize(
 }
 
 /**
- * DSH `tools.restrict({ allow })` throws on names that are not currently
- * registered global tools (this host has `web_search` but not `web_fetch`).
- * When parentVisible is a non-empty set, intersect YAML with that catalog
- * (agent-plane builtins + parent schemas). Otherwise fall back to known
- * (often plugin-only schemas()); if known is missing/empty, keep the yaml list.
+ * Drop unregistered preset names without making the parent's role the child's
+ * capability ceiling. Nested roles may legitimately need tools their caller
+ * cannot use (planner → explore, swarm → specialist).
  */
 export function filterAllowlist(
   allow: readonly string[],
   known?: Iterable<string>,
   parentVisible?: Iterable<string>,
 ): string[] {
-  const parent = parentVisible != null ? new Set(parentVisible) : undefined
-  if (parent && parent.size > 0) {
-    return allow.filter((name) => parent.has(name))
-  }
-  if (known == null) return [...allow]
-  const set = known instanceof Set ? known : new Set(known)
-  if (set.size === 0) return [...allow]
-  return allow.filter((name) => set.has(name))
+  if (known == null && parentVisible == null) return [...allow]
+  const catalog = new Set([...(known ?? []), ...(parentVisible ?? [])])
+  if (catalog.size === 0) return [...allow]
+  return allow.filter((name) => catalog.has(name))
 }
 
 export function assertCallerPolicy(
@@ -431,6 +426,7 @@ async function runOne(
       neoRunId: runId,
       neoRunToken: identity.run_token,
       neoTaskId: neoTaskIdForChild(opts),
+      neoTaskToken: neoTaskTokenForChild(opts),
     },
   }
   try {
@@ -526,22 +522,9 @@ async function runSpawn(
     ),
     toolFilter: {
       allow: filterAllowlist(
-        preset.tool_allowlist.filter(
-          (name) =>
-            name !== 'bash' &&
-            (!preset.readonly ||
-              ![
-                'sandbox_exec',
-                'deploy_up',
-                'deploy_down',
-                'browser_evaluate',
-                'browser_eval',
-                'browser_act',
-                'browser_navigate',
-                'traffic_replay',
-                'oast_register',
-              ].includes(name)),
-        ),
+        // readonly describes the role's activity, not an exec ban: explore's
+        // preset explicitly permits sandboxed read-oriented reconnaissance.
+        preset.tool_allowlist.filter((name) => name !== 'bash'),
         opts.knownGlobalTools,
         opts.parentVisibleTools,
       ),
@@ -554,6 +537,7 @@ async function runSpawn(
       neoDepth: Number((opts.parent as any)?.options?.neoDepth ?? 0) + 1,
       neoRunToken: opts.runToken,
       ...(neoTaskId ? { neoTaskId } : {}),
+      neoTaskToken: neoTaskTokenForChild(opts),
       ...workhorse,
     },
   })
@@ -605,6 +589,16 @@ export function workhorseAgentOptions(
 
 function neoTaskIdForChild(opts: DelegateOptions): string {
   return requireTaskId(undefined, opts.env ?? process.env, opts.parent as any)
+}
+
+function neoTaskTokenForChild(opts: DelegateOptions): string {
+  const env = opts.env ?? process.env
+  const parent = opts.parent as { options?: { neoTaskToken?: unknown } }
+  const fromParent = parent?.options?.neoTaskToken
+  if (env.NEO_TASK_ID && env.NEO_TASK_TOKEN) return env.NEO_TASK_TOKEN
+  if (typeof fromParent === 'string' && fromParent) return fromParent
+  if (env.NEO_TASK_TOKEN) return env.NEO_TASK_TOKEN
+  throw new Error('NEO_TASK_TOKEN is required')
 }
 
 async function formatTaskMemoryInject(

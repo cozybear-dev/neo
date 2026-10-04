@@ -4,14 +4,18 @@ import {
   createHash,
   timingSafeEqual,
 } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { isIP } from 'node:net'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { createPool, migrate, type Db } from './db.js'
 import { normalizeScopeHost } from './host.js'
+import { sessionGrant, sessionMode } from './session.js'
 export type AppOptions = {
   databaseUrl?: string
   allowlistEnv?: string
+  modeDefault?: string
+  sessionOpenToken?: string
   pool?: Db
   adminToken?: string
   brokerToken?: string
@@ -105,13 +109,18 @@ export function checkScope(input: {
   const granted = matchPattern(input.taskAllowlist ?? [], target)
   const ceiling =
     input.envAllowlist.length === 0 || matchPattern(input.envAllowlist, target)
+  if (granted && ceiling)
+    return {
+      allowed: true,
+      matched: granted,
+      reason: 'matched approved task scope',
+    }
+  if (!granted)
+    return { allowed: false, matched: '', reason: 'not in the task allowlist' }
   return {
-    allowed: !!granted && !!ceiling,
-    matched: granted ?? '',
-    reason:
-      granted && ceiling
-        ? 'matched approved task scope'
-        : 'default deny: task scope or global ceiling',
+    allowed: false,
+    matched: granted,
+    reason: 'outside NEO_ALLOWLIST',
   }
 }
 const str = {
@@ -141,10 +150,23 @@ export async function buildApp(
     )
   if (equal(admin, broker))
     throw new Error('admin and broker tokens must differ')
+  const modeDefault = sessionMode(
+    opts.modeDefault ?? process.env.NEO_MODE_DEFAULT,
+  )
+  const opener = opts.sessionOpenToken ?? process.env.NEO_SESSION_OPEN_TOKEN
   const databaseUrl = opts.databaseUrl ?? process.env.DATABASE_URL
   if (!opts.pool && !databaseUrl) throw new Error('DATABASE_URL required')
   const pool = opts.pool ?? createPool(databaseUrl!)
-  await migrate(pool)
+  try {
+    await migrate(pool)
+  } catch (error) {
+    if ((error as { code?: string }).code === '28P01')
+      throw new Error(
+        'database password rejected for user neo; the pgdata volume still has a different role password',
+        { cause: error },
+      )
+    throw error
+  }
   const ceiling = patterns(
     (opts.allowlistEnv ?? process.env.NEO_ALLOWLIST ?? '')
       .split(',')
@@ -286,6 +308,7 @@ export async function buildApp(
       method === 'DELETE'
         ? undefined
         : url === '/tasks' ||
+            url === '/session' ||
             url === '/tasks/:id' ||
             url === '/tasks/:id/plan' ||
             url === '/tasks/:id/authorizations' ||
@@ -322,6 +345,60 @@ export async function buildApp(
       return reply.code(503).send({ ok: false })
     }
   })
+  app.post(
+    '/session',
+    {
+      schema: schema({ objective: str }, ['objective']),
+      preValidation: async (req: any) => {
+        const body = req.body
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return
+        if (Object.keys(body).some((key) => key !== 'objective'))
+          fail(400, 'session accepts only an objective')
+      },
+    },
+    async (req: any, reply) => {
+      if (!opener) fail(503, 'session open is not configured')
+      if (!equal(bearer(req), opener)) fail(403, 'session opener required')
+      const grant = sessionGrant(ceiling, modeDefault)
+      const id = randomUUID()
+      const secret = token()
+      try {
+        const row = await tx(async (c) => {
+          const result = await c.query(
+            'INSERT INTO tasks(id,mode,objective,allowlist,denylist,status,token_hash) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+            [
+              id,
+              grant.mode,
+              req.body.objective,
+              grant.allowlist,
+              grant.denylist,
+              'pending',
+              hash(secret),
+            ],
+          )
+          await c.query('INSERT INTO task_memory(task_id) VALUES($1)', [id])
+          await c.query(
+            'INSERT INTO task_authorizations(id,task_id,revision,actor,reason,policy) VALUES($1,$2,0,$3,$4,$5)',
+            [
+              randomUUID(),
+              id,
+              'chat',
+              'opened from the chat',
+              JSON.stringify({
+                allowlist: grant.allowlist,
+                denylist: grant.denylist,
+              }),
+            ],
+          )
+          return result.rows[0]
+        })
+        return reply.code(201).send({ ...publicTask(row), task_token: secret })
+      } catch (e) {
+        if ((e as any).code === '23505') fail(409, 'task already exists')
+        throw e
+      }
+    },
+  )
   app.post(
     '/tasks',
     {
@@ -999,7 +1076,14 @@ export async function buildApp(
   return app
 }
 async function main() {
-  const app = await buildApp()
+  const sessionOpenToken = (
+    await readFile(
+      process.env.NEO_SESSION_OPEN_FILE || '/state/session-open.token',
+      'utf8',
+    )
+  ).trim()
+  if (!sessionOpenToken) throw new Error('session open token is empty')
+  const app = await buildApp({ sessionOpenToken })
   for (const signal of ['SIGTERM', 'SIGINT'] as const)
     process.once(signal, () => {
       app

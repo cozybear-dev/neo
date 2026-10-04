@@ -7,6 +7,7 @@ import {
   loadPresetsFromDir,
   resolvePresetsDir,
 } from './presets.ts'
+import { registerSessionOpen } from './session-open.ts'
 
 export const name = 'neo-orchestrator'
 export const inject = ['tools']
@@ -81,4 +82,5 @@ export function apply(ctx: Context): void {
     getKnownGlobalTools: (parent?: unknown) => knownGlobalTools(ctx, parent),
   }))
     ctx.tools.register(defineTool(def))
+  registerSessionOpen(ctx)
 }

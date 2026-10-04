@@ -56,7 +56,7 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
             command: String(args.command ?? ''),
             cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
           },
-          { ...options, signal: exec.signal },
+          { ...options, signal: exec.signal, agent: exec.agent },
         )
       },
     },

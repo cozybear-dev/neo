@@ -34,6 +34,7 @@ describe('DSH permission mode in the compose stack', () => {
   it('uses task directories and never grants world access', () => {
     const entrypoint = read('docker/dsh/entrypoint.sh')
     assert.match(entrypoint, /NEO_WORKSPACE_BASE.*tasks/)
+    assert.match(entrypoint, /stat -c %u/)
     assert.match(entrypoint, /chmod 750/)
     assert.doesNotMatch(entrypoint, /chmod (1777|a\+r)/)
     assert.match(entrypoint, /mktemp/)
