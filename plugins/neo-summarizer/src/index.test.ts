@@ -162,19 +162,73 @@ describe('collectStreamText', () => {
       yield { type: 'block-start', index: 0, blockType: 'text' }
       yield { type: 'text-delta', index: 0, text: 'hello ' }
       yield { type: 'text-delta', index: 0, text: 'world' }
-      yield { type: 'block-end', index: 0, block: { type: 'text', text: 'hello world' } }
+      yield {
+        type: 'block-end',
+        index: 0,
+        block: { type: 'text', text: 'hello world' },
+      }
       yield { type: 'finish', reason: { kind: 'stop' } }
     }
     assert.equal(await collectStreamText(ok()), 'hello world')
 
     async function* bad() {
-      yield { type: 'finish', reason: { kind: 'error', failure: { message: 'nope', code: 'X' } } }
+      yield {
+        type: 'finish',
+        reason: { kind: 'error', failure: { message: 'nope', code: 'X' } },
+      }
     }
     await assert.rejects(() => collectStreamText(bad()), /error/)
   })
 })
 
 describe('createPostExecuteHandler', () => {
+  it('preserves context metadata, saves raw evidence, and redacts before summarizing', async () => {
+    const raw = 'password=private-value\n' + tokensOfXs(12_000)
+    let evidence = ''
+    const handler = createPostExecuteHandler({
+      getLlm: () => async (input) => {
+        assert.ok(!input.user.includes('private-value'))
+        return 'safe summary'
+      },
+      getDefaultModel: () => ({
+        provider: 'child-provider',
+        model: 'child-model',
+      }),
+      persist: async (text) => {
+        evidence = text
+        return '/task/evidence/raw.txt'
+      },
+    })
+    const contexts = [{ key: 'audit-context' }]
+    const result = await handler(
+      { name: 'sandbox_exec' },
+      { content: [{ type: 'text', text: raw }] },
+      async () => ({ kind: 'accept', additionalContexts: contexts }),
+    )
+    assert.equal(evidence, raw)
+    assert.deepEqual(result.additionalContexts, contexts)
+    assert.match(
+      result.content?.[0]?.text ?? '',
+      /Raw evidence: \/task\/evidence\/raw.txt/,
+    )
+  })
+
+  it('propagates cancellation instead of returning a successful truncated output', async () => {
+    await assert.rejects(
+      () =>
+        processLargeToolOutput({
+          text: tokensOfXs(12_000),
+          toolName: 'sandbox_exec',
+          provider: 'p',
+          model: 'm',
+          signal: AbortSignal.abort(),
+          llm: async () => {
+            throw new DOMException('aborted', 'AbortError')
+          },
+        }),
+      { name: 'AbortError' },
+    )
+  })
   it('calls next() and replaces oversized content via fake llm', async () => {
     let nextCalled = false
     const llm = llmCompleteFromStream(async function* () {
@@ -183,7 +237,10 @@ describe('createPostExecuteHandler', () => {
     })
     const handler = createPostExecuteHandler({
       getLlm: () => llm,
-      getDefaultModel: () => ({ provider: 'deepseek-official', model: 'deepseek-v4-flash' }),
+      getDefaultModel: () => ({
+        provider: 'deepseek-official',
+        model: 'deepseek-v4-flash',
+      }),
     })
     const big = tokensOfXs(12_000)
     const decision = await handler(

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Seed the neo profile overlay, render $DSH_HOME/neo-llm.patch.yml from NEO_LLM_*,
-# map NEO_LLM_API_KEY onto the adapter env DSH expects, then exec the image CMD.
+# map NEO_LLM_API_KEY onto the adapter env DSH expects, import CLI OAuth grants,
+# then exec the image CMD.
 set -euo pipefail
+umask 077
 
 export DSH_HOME="${DSH_HOME:-/home/node/.dsh}"
 PROFILE_SRC="${NEO_PROFILE_SRC:-/opt/neo/plugins/neo-profile}"
 PROFILE_DST="${DSH_HOME}/profiles/neo"
 RENDERER="${NEO_LLM_RENDERER:-/opt/neo/docker/dsh/render-llm-settings.mjs}"
+IMPORTER="${NEO_LLM_OAUTH_IMPORTER:-/opt/neo/docker/dsh/import-llm-oauth.mjs}"
 EXA_PKG="${NEO_EXA_PKG:-/opt/dsh/packages/web/web-search-exa}"
 
 mkdir -p "${DSH_HOME}/profiles/node_modules/@deepseek-ai" "${PROFILE_DST}"
@@ -58,6 +61,10 @@ if [[ ! -f "${RENDERER}" ]]; then
   echo "neo: missing LLM settings renderer at ${RENDERER}" >&2
   exit 1
 fi
+if [[ ! -f "${IMPORTER}" ]]; then
+  echo "neo: missing LLM oauth importer at ${IMPORTER}" >&2
+  exit 1
+fi
 
 # settings.yaml is a one-shot 0.1 import. A leftover file is merged over the
 # profile on first 0.2 boot and, once settings.yaml.imported exists, later
@@ -70,18 +77,25 @@ fi
 # Writes neo-llm.patch.yml (env wins) and prints `export KEY='…'` for the mapped credential.
 # Redirect, not eval "$(…)", so a renderer failure trips `set -e` (bash does not
 # inherit errexit into command substitution without inherit_errexit).
-ENV_FILE="${DSH_HOME}/.neo-llm.env"
+ENV_FILE="$(mktemp "${DSH_HOME}/.neo-llm.XXXXXX")"
+trap 'rm -f "${ENV_FILE}"' EXIT
+chmod 600 "${ENV_FILE}"
 node "${RENDERER}" --dsh-home "${DSH_HOME}" --export > "${ENV_FILE}"
 # shellcheck disable=SC1090
 set -a
 # shellcheck disable=SC1091
 source "${ENV_FILE}"
 set +a
+rm -f "${ENV_FILE}"
 
 if [[ "${NEO_DUMP_SETTINGS:-}" == "1" ]]; then
   cat "${DSH_HOME}/neo-llm.patch.yml"
   exit 0
 fi
+
+# Copy host CLI OAuth tokens into $DSH_HOME/.credentials.yaml. No-op for API-key
+# providers. Fail closed when an oauth alias has neither a host file nor a grant.
+node "${IMPORTER}" --dsh-home "${DSH_HOME}"
 
 if [[ "$#" -eq 0 ]]; then
   set -- dsh --profile neo --no-open
@@ -135,16 +149,18 @@ if [[ "${1:-}" == "dsh" ]]; then
   fi
 fi
 
-# Named volume mounts wipe image ownership; keep /workspace writable for USER neo.
-mkdir -p /workspace
-chmod 1777 /workspace || true
-# Pre-create specialist dirs so neo can write even if umask is strict.
-for d in agents explore recon research sandbox browser verification; do
-  mkdir -p "/workspace/${d}"
-  chmod 1777 "/workspace/${d}" || true
-done
-# dsh write publishes new files as 0600. Sandbox user neo (a different uid)
-# must be able to read deliverables already on the volume.
-find /workspace -type f ! -perm -004 -exec chmod a+r {} + || true
-
+# Each instance is bound to an operator-created task and an isolated workspace.
+if [[ "${1:-}" == "dsh" ]]; then
+  if [[ ! "${NEO_TASK_ID:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] || [[ -z "${NEO_TASK_TOKEN:-}" ]]; then
+    echo "neo: set NEO_TASK_ID and NEO_TASK_TOKEN from the operator task-create command" >&2
+    exit 1
+  fi
+  export NEO_WORKSPACE_BASE="${NEO_WORKSPACE_BASE:-/workspace}"
+  NEO_MODE="$(node /opt/neo/docker/dsh/resolve-task.mjs)"
+  export NEO_MODE
+  export NEO_WORKSPACE="${NEO_WORKSPACE_BASE}/tasks/${NEO_TASK_ID,,}"
+  mkdir -p "${NEO_WORKSPACE}"
+  chmod 750 "${NEO_WORKSPACE}"
+  cd "${NEO_WORKSPACE}"
+fi
 exec "$@"

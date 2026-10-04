@@ -65,7 +65,10 @@ declare module '@deepseek-ai/dsh-tools' {
     parameters: Record<string, unknown>
     output: {
       schema: unknown
-      render: (args: unknown, value: unknown) => Array<{ type: string; text: string }>
+      render: (
+        args: unknown,
+        value: unknown,
+      ) => Array<{ type: string; text: string }>
     }
     execute: (
       args: Record<string, unknown>,
@@ -77,5 +80,50 @@ declare module '@deepseek-ai/dsh-tools' {
 declare module '@deepseek-ai/cordis' {
   export interface Context {
     tools: { register: (tool: unknown) => void }
+  }
+}
+declare module 'node:crypto' {
+  export function randomUUID(): string
+}
+declare module 'node:path' {
+  export const sep: string
+  export function resolve(...paths: string[]): string
+  export function dirname(path: string): string
+}
+declare module 'node:fs/promises' {
+  export function open(
+    path: string,
+    flags: number,
+    mode?: number,
+  ): Promise<{
+    stat(): Promise<{ isFile(): boolean; nlink: number; size: number }>
+    readFile(): Promise<Buffer>
+    truncate(length: number): Promise<void>
+    writeFile(data: Buffer): Promise<void>
+    close(): Promise<void>
+  }>
+  export function realpath(path: string): Promise<string>
+  export function readdir(
+    path: string,
+    opts: { withFileTypes: true },
+  ): Promise<Array<{ name: string; isFile(): boolean; isDirectory(): boolean }>>
+  export function readFile(path: string): Promise<Buffer>
+  export function mkdir(
+    path: string,
+    opts?: { recursive?: boolean },
+  ): Promise<void>
+  export function writeFile(
+    path: string,
+    data: Buffer,
+    opts?: { mode?: number },
+  ): Promise<void>
+  export function lstat(path: string): Promise<{ isFile(): boolean }>
+}
+declare module 'node:fs' {
+  export const constants: {
+    O_RDONLY: number
+    O_WRONLY: number
+    O_CREAT: number
+    O_NOFOLLOW: number
   }
 }

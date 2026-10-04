@@ -1,5 +1,9 @@
+import {
+  resolveTaskId as boundTaskId,
+  taskHeaders,
+} from '../../neo-runtime/contracts.mjs'
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, writeFile, open } from 'node:fs/promises'
 import { normalizeScopeHost } from './host.ts'
 
 export type EnvMap = Record<string, string | undefined>
@@ -38,10 +42,17 @@ export type NetworkResult = { requests: CapturedRequest[] }
 
 export type BrowserSession = {
   navigate(url: string, wait?: string): Promise<NavigateResult>
-  act(args: { action: 'click' | 'type' | 'select'; selector?: string; text?: string; instruction: string }): Promise<ActResult>
+  act(args: {
+    action: 'click' | 'type' | 'select'
+    selector?: string
+    text?: string
+    instruction: string
+  }): Promise<ActResult>
   evaluate(expression: string): Promise<unknown>
   screenshot(): Promise<Buffer>
   network(): Promise<CapturedRequest[]>
+  close?(): Promise<void>
+  alive?(): boolean
 }
 
 export type PlaywrightPage = {
@@ -57,7 +68,10 @@ export type PlaywrightPage = {
 }
 
 export type PlaywrightBrowser = {
-  contexts(): Array<{ pages(): PlaywrightPage[]; newPage(): Promise<PlaywrightPage> }>
+  contexts(): Array<{
+    pages(): PlaywrightPage[]
+    newPage(): Promise<PlaywrightPage>
+  }>
   newPage(): Promise<PlaywrightPage>
 }
 
@@ -101,18 +115,26 @@ export const DEFAULT_CDP_URL = 'http://browser:9222'
 export const DEFAULT_SCREENSHOT_DIR = '/workspace/browser'
 export const DEFAULT_TRAFFIC_PATH = '/workspace/traffic/http.jsonl'
 
-let cachedSession: Promise<BrowserSession> | undefined
+const sessions = new Map<string, Promise<BrowserSession>>()
 
 export function resetBrowserSession(): void {
-  cachedSession = undefined
+  for (const promise of sessions.values())
+    void promise.then((s) => s.close?.()).catch(() => {})
+  sessions.clear()
 }
 
 export function cdpUrl(opts: ClientOptions = {}): string {
   const env = opts.env ?? process.env
-  return (opts.cdpUrl ?? env.BROWSER_CDP_URL ?? DEFAULT_CDP_URL).replace(/\/+$/, '')
+  return (opts.cdpUrl ?? env.BROWSER_CDP_URL ?? DEFAULT_CDP_URL).replace(
+    /\/+$/,
+    '',
+  )
 }
 
-export function rewriteCdpWebSocketUrl(wsUrl: string, httpEndpoint: string): string {
+export function rewriteCdpWebSocketUrl(
+  wsUrl: string,
+  httpEndpoint: string,
+): string {
   const http = new URL(httpEndpoint)
   const ws = new URL(wsUrl)
   ws.protocol = http.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -120,25 +142,7 @@ export function rewriteCdpWebSocketUrl(wsUrl: string, httpEndpoint: string): str
   return ws.toString()
 }
 
-export function redactSecrets(value: unknown): unknown {
-  const secretKey = /token|secret|authorization|api[_-]?key|private|password|passwd|cookie/i
-  const walk = (input: unknown): unknown => {
-    if (Array.isArray(input)) return input.map(walk)
-    if (input && typeof input === 'object') {
-      const out: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
-        out[k] = secretKey.test(k) ? '[redacted]' : walk(v)
-      }
-      return out
-    }
-    return input
-  }
-  return walk(value)
-}
-
-export function renderSafe(_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> {
-  return [{ type: 'text', text: JSON.stringify(redactSecrets(value)) }]
-}
+export { redactSecrets, renderSafe } from '../../neo-runtime/redact.mjs'
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -149,7 +153,22 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 function nodeFs(): FsLike {
-  return { mkdir, writeFile, appendFile }
+  return {
+    mkdir: (p, o) => mkdir(p, { ...o, mode: 0o750 }),
+    writeFile: (p, d) => writeFile(p, d, { mode: 0o640 }),
+    appendFile: async (p, d) => {
+      const file = await open(p, 'a', 0o640)
+      try {
+        if ((await file.stat()).size + Buffer.byteLength(d) > 16777216)
+          throw new Error('task traffic capture quota exceeded')
+        await file.chmod(0o640)
+        await file.writeFile(d)
+        await file.sync()
+      } finally {
+        await file.close()
+      }
+    },
+  }
 }
 
 function dirOf(filePath: string): string {
@@ -157,11 +176,27 @@ function dirOf(filePath: string): string {
   return i <= 0 ? '.' : filePath.slice(0, i)
 }
 
-export async function appendTraffic(rec: CapturedRequest, opts: ClientOptions = {}): Promise<void> {
+const trafficWrites = new Map<string, Promise<void>>()
+const trafficBytes = new Map<string, number>()
+export async function appendTraffic(
+  rec: CapturedRequest,
+  opts: ClientOptions = {},
+): Promise<void> {
   const fs = opts.fs ?? nodeFs()
-  const path = opts.trafficPath ?? opts.env?.TRAFFIC_LOG ?? DEFAULT_TRAFFIC_PATH
-  await fs.mkdir(dirOf(path), { recursive: true })
-  await fs.appendFile(path, `${JSON.stringify(rec)}\n`)
+  const path = opts.trafficPath ?? `${taskRoot(opts)}/traffic/http.jsonl`
+  const data = `${JSON.stringify(rec)}\n`
+  const pending = (trafficWrites.get(path) ?? Promise.resolve()).then(
+    async () => {
+      const next = (trafficBytes.get(path) ?? 0) + Buffer.byteLength(data)
+      if (next > 16777216)
+        throw new Error('task traffic capture quota exceeded')
+      await fs.mkdir(dirOf(path), { recursive: true })
+      await fs.appendFile(path, data)
+      trafficBytes.set(path, next)
+    },
+  )
+  trafficWrites.set(path, pending)
+  await pending
 }
 
 export class ScopeDeniedError extends Error {
@@ -195,24 +230,13 @@ export function resolveTaskId(
   env: EnvMap = process.env,
   agent?: AgentRef,
 ): string | undefined {
-  const parent = agent?.parent
-  const parentOption = typeof parent?.options?.neoTaskId === 'string'
-    ? parent.options.neoTaskId
-    : undefined
-  const option = typeof agent?.options?.neoTaskId === 'string' ? agent.options.neoTaskId : undefined
-  const candidates = [
-    arg,
-    env.NEO_TASK_ID,
-    option,
-    parentOption,
-    taskIdFromSession(parent?.id),
-    taskIdFromSession(agent?.parentSession?.id),
-    taskIdFromSession(agent?.id),
-  ]
-  return candidates.map((v) => v?.trim()).find((v) => v && UUID_RE.test(v))
+  return boundTaskId(arg, env, agent)
 }
 
-export async function assertInScope(target: string, opts: ClientOptions = {}): Promise<void> {
+export async function assertInScope(
+  target: string,
+  opts: ClientOptions = {},
+): Promise<void> {
   if (opts.skipScopeCheck) return
   const env = opts.env ?? process.env
   const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
@@ -223,119 +247,69 @@ export async function assertInScope(target: string, opts: ClientOptions = {}): P
   if (taskId) payload.task_id = taskId
   const res = await fetchImpl(`${control}/scope/check`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...taskHeaders(env) },
     body: JSON.stringify(payload),
     signal: opts.signal,
   })
   const text = await res.text()
   let body: { allowed?: boolean; reason?: string } = {}
   try {
-    body = text ? JSON.parse(text) as { allowed?: boolean; reason?: string } : {}
+    body = text
+      ? (JSON.parse(text) as { allowed?: boolean; reason?: string })
+      : {}
   } catch {
     body = { allowed: false, reason: text || 'invalid scope response' }
   }
   if (res.status < 200 || res.status >= 300) {
-    throw new Error(`scope check failed (${res.status}): ${body.reason ?? 'http error'}`)
+    throw new Error(
+      `scope check failed (${res.status}): ${body.reason ?? 'http error'}`,
+    )
   }
   if (body.allowed !== true) {
     throw new ScopeDeniedError(host || target, body.reason ?? 'default deny')
   }
 }
-function recordCapture(opts: ClientOptions, store: CapturedRequest[], partial: Omit<CapturedRequest, 'id' | 'timestamp'>): CapturedRequest {
-  const rec: CapturedRequest = {
-    id: (opts.randomId ?? randomUUID)(),
-    timestamp: (opts.now ?? (() => new Date()))().toISOString(),
-    ...partial,
-  }
-  store.push(rec)
-  void appendTraffic(rec, opts)
-  return rec
-}
-
-export function wrapPlaywrightPage(page: PlaywrightPage, opts: ClientOptions = {}): BrowserSession {
-  const requests: CapturedRequest[] = []
-  page.on('request', ((req: { method(): string; url(): string; headers(): Record<string, string>; postData(): string | null }) => {
-    recordCapture(opts, requests, {
-      method: req.method(),
-      url: req.url(),
-      headers: req.headers(),
-      postData: req.postData() ?? undefined,
-    })
-  }) as (...args: never[]) => unknown)
-  page.on('response', ((res: { url(): string; status(): number }) => {
-    const hit = [...requests].reverse().find((r) => r.url === res.url() && r.status === undefined)
-    if (hit) hit.status = res.status()
-  }) as (...args: never[]) => unknown)
-
-  return {
-    async navigate(url, wait) {
-      await page.goto(url, { waitUntil: wait || 'load' })
-      return { url: page.url(), title: await page.title() }
-    },
-    async act(args) {
-      const selector = args.selector?.trim()
-      if (!selector) {
-        throw new Error('selector is required (instruction-only act needs a CSS selector)')
-      }
-      if (args.action === 'click') await page.click(selector)
-      else if (args.action === 'type') {
-        if (args.text === undefined) throw new Error('text is required for type')
-        await page.fill(selector, args.text)
-      } else if (args.action === 'select') {
-        if (args.text === undefined) throw new Error('text is required for select')
-        await page.selectOption(selector, args.text)
-      } else {
-        throw new Error(`unknown action: ${String(args.action)}`)
-      }
-      return { ok: true as const }
-    },
-    async evaluate(expression) {
-      return page.evaluate((e: string) => eval(e), expression)
-    },
-    async screenshot() {
-      return page.screenshot({ type: 'png' })
-    },
-    async network() {
-      return requests
-    },
-  }
-}
-
-export async function connectPlaywright(opts: ClientOptions = {}): Promise<BrowserSession> {
-  const endpoint = cdpUrl(opts)
-  let pw = opts.playwright
-  if (!pw && opts.importPlaywright) {
-    pw = await opts.importPlaywright()
-  }
-  if (!pw) {
-    try {
-      pw = await import('playwright') as unknown as PlaywrightLike
-    } catch {
-      try {
-        pw = await import('playwright-core') as unknown as PlaywrightLike
-      } catch {
-        pw = undefined
-      }
-    }
-  }
-  if (!pw) throw new Error('playwright not available')
-  const browser = await pw.chromium.connectOverCDP(endpoint)
-  const contexts = browser.contexts()
-  const page = contexts[0]?.pages()[0] ?? await (contexts[0]?.newPage() ?? browser.newPage())
-  return wrapPlaywrightPage(page, opts)
+export async function connectPlaywright(
+  _opts: ClientOptions = {},
+): Promise<BrowserSession> {
+  throw new Error('Playwright transport is unsupported; use task-isolated CDP')
 }
 
 class CdpConn {
+  sessionId?: string
+  closed = false
   private id = 0
-  private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
-  private events = new Map<string, Array<(params: Record<string, unknown>) => void>>()
+  private pending = new Map<
+    number,
+    { resolve: (v: unknown) => void; reject: (e: Error) => void }
+  >()
+  private events = new Map<
+    string,
+    Array<(params: Record<string, unknown>) => void>
+  >()
   private ws: WsLike
 
   constructor(ws: WsLike) {
     this.ws = ws
+    const disconnect = () => {
+      this.closed = true
+      for (const p of this.pending.values())
+        p.reject(new Error('CDP disconnected'))
+      this.pending.clear()
+    }
+    if (ws.addEventListener) {
+      ws.addEventListener('close', disconnect)
+      ws.addEventListener('error', disconnect)
+    }
     const onMessage = (ev: { data?: unknown }) => {
       const raw = typeof ev.data === 'string' ? ev.data : String(ev.data ?? '')
-      let msg: { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message?: string } }
+      let msg: {
+        id?: number
+        method?: string
+        params?: Record<string, unknown>
+        result?: unknown
+        error?: { message?: string }
+      }
       try {
         msg = JSON.parse(raw) as typeof msg
       } catch {
@@ -360,11 +334,52 @@ class CdpConn {
     }
   }
 
+  close(): void {
+    this.ws.close()
+  }
+  event(method: string): { promise: Promise<void>; cancel: () => void } {
+    let cancel = () => {}
+    const promise = new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer)
+        const list = this.events.get(method) ?? []
+        this.events.set(
+          method,
+          list.filter((fn) => fn !== done),
+        )
+      }
+      const done = () => {
+        cleanup()
+        resolve()
+      }
+      const timer = setTimeout(() => {
+        cleanup()
+        reject(new Error('navigation deadline exceeded'))
+      }, 30000)
+      cancel = () => {
+        cleanup()
+        resolve()
+      }
+      this.on(method, done)
+    })
+    return { promise, cancel: () => cancel() }
+  }
+
   waitOpen(): Promise<void> {
     if (this.ws.readyState === 1) return Promise.resolve()
     return new Promise((resolve, reject) => {
-      const ok = () => resolve()
-      const fail = () => reject(new Error('cdp websocket error'))
+      const timer = setTimeout(
+        () => reject(new Error('CDP connection deadline exceeded')),
+        10000,
+      )
+      const ok = () => {
+        clearTimeout(timer)
+        resolve()
+      }
+      const fail = () => {
+        clearTimeout(timer)
+        reject(new Error('cdp websocket error'))
+      }
       if (typeof this.ws.addEventListener === 'function') {
         this.ws.addEventListener('open', ok)
         this.ws.addEventListener('error', fail)
@@ -382,10 +397,26 @@ class CdpConn {
   }
 
   send(method: string, params?: Record<string, unknown>): Promise<unknown> {
+    if (this.closed) return Promise.reject(new Error('CDP disconnected'))
     const id = ++this.id
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
-      this.ws.send(JSON.stringify({ id, method, params }))
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error('CDP command deadline exceeded'))
+      }, 30000)
+      this.pending.set(id, {
+        resolve: (v) => {
+          clearTimeout(timer)
+          resolve(v)
+        },
+        reject: (e) => {
+          clearTimeout(timer)
+          reject(e)
+        },
+      })
+      this.ws.send(
+        JSON.stringify({ id, method, params, sessionId: this.sessionId }),
+      )
     })
   }
 }
@@ -413,13 +444,21 @@ async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   })
 }
 
-async function fetchJson(fetchImpl: FetchLike, url: string, signal?: AbortSignal): Promise<unknown> {
+async function fetchJson(
+  fetchImpl: FetchLike,
+  url: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
   const attempts = 3
   let lastErr: unknown
   for (let i = 0; i < attempts; i++) {
     throwIfAborted(signal)
     try {
-      const res = await fetchImpl(url, { signal })
+      const res = await fetchImpl(url, {
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(10000)])
+          : AbortSignal.timeout(10000),
+      })
       const text = await res.text()
       if (res.status < 200 || res.status >= 300) {
         throw new Error(`cdp http ${res.status}: ${text}`)
@@ -435,127 +474,277 @@ async function fetchJson(fetchImpl: FetchLike, url: string, signal?: AbortSignal
   throw lastErr
 }
 
-export async function connectCdp(opts: ClientOptions = {}): Promise<BrowserSession> {
+export function taskRoot(opts: ClientOptions = {}): string {
+  const env = opts.env ?? process.env
+  const id = resolveTaskId(undefined, env, opts.agent)
+  if (!id) throw new Error('valid task identity required')
+  return `${env.NEO_WORKSPACE_BASE ?? '/workspace'}/tasks/${id}`
+}
+
+export async function connectCdp(
+  opts: ClientOptions = {},
+): Promise<BrowserSession> {
   const endpoint = cdpUrl(opts)
   const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
-  const Ws = opts.ws ?? (globalThis as unknown as { WebSocket: WsCtor }).WebSocket
+  const Ws =
+    opts.ws ?? (globalThis as unknown as { WebSocket: WsCtor }).WebSocket
   if (!Ws) throw new Error('WebSocket is not available for CDP')
-
-  let list = await fetchJson(fetchImpl, `${endpoint}/json/list`, opts.signal) as Array<{
-    type?: string
-    webSocketDebuggerUrl?: string
-  }>
-  let pageMeta = Array.isArray(list) ? list.find((p) => p.type === 'page' && p.webSocketDebuggerUrl) : undefined
-  if (!pageMeta?.webSocketDebuggerUrl) {
-    await fetchImpl(`${endpoint}/json/new?about:blank`, { signal: opts.signal })
-    list = await fetchJson(fetchImpl, `${endpoint}/json/list`, opts.signal) as typeof list
-    pageMeta = Array.isArray(list) ? list.find((p) => p.type === 'page' && p.webSocketDebuggerUrl) : undefined
-  }
-  if (!pageMeta?.webSocketDebuggerUrl) {
-    const version = await fetchJson(fetchImpl, `${endpoint}/json/version`, opts.signal) as { webSocketDebuggerUrl?: string }
-    if (!version?.webSocketDebuggerUrl) throw new Error('no CDP websocket url at ' + endpoint)
-    pageMeta = { type: 'page', webSocketDebuggerUrl: version.webSocketDebuggerUrl }
-  }
-
-  const wsUrl = rewriteCdpWebSocketUrl(pageMeta.webSocketDebuggerUrl!, endpoint)
-  const conn = new CdpConn(new Ws(wsUrl))
+  const version = (await fetchJson(
+    fetchImpl,
+    `${endpoint}/json/version`,
+    opts.signal,
+  )) as { webSocketDebuggerUrl?: string }
+  if (!version.webSocketDebuggerUrl)
+    throw new Error('browser CDP discovery missing websocket URL')
+  const conn = new CdpConn(
+    new Ws(rewriteCdpWebSocketUrl(version.webSocketDebuggerUrl, endpoint)),
+  )
   await conn.waitOpen()
+  const context = (await conn.send('Target.createBrowserContext', {
+    disposeOnDetach: true,
+  })) as { browserContextId: string }
+  const target = (await conn.send('Target.createTarget', {
+    url: 'about:blank',
+    browserContextId: context.browserContextId,
+  })) as { targetId: string }
+  const attached = (await conn.send('Target.attachToTarget', {
+    targetId: target.targetId,
+    flatten: true,
+  })) as { sessionId: string }
+  conn.sessionId = attached.sessionId
   await conn.send('Page.enable')
   await conn.send('Runtime.enable')
   await conn.send('Network.enable')
-
+  await conn.send('Network.setBypassServiceWorker', { bypass: true })
   const requests: CapturedRequest[] = []
-  const byNetworkId = new Map<string, CapturedRequest>()
-  conn.on('Network.requestWillBeSent', (params) => {
-    const req = params.request as { url?: string; method?: string; headers?: Record<string, string>; postData?: string } | undefined
-    if (!req?.url) return
-    const rec = recordCapture(opts, requests, {
-      method: req.method ?? 'GET',
-      url: req.url,
-      headers: req.headers ?? {},
-      postData: req.postData,
-    })
-    if (typeof params.requestId === 'string') byNetworkId.set(params.requestId, rec)
+  const lifecycle = new AbortController()
+  let writes = Promise.resolve()
+  const activeRequests = new Set<Promise<void>>()
+  let captureBytes = 0
+  let captureError: unknown
+  conn.on('Fetch.requestPaused', (params) => {
+    const request = params.request as {
+      url: string
+      method: string
+      headers: Record<string, string>
+      postData?: string
+    }
+    const requestId = params.requestId as string
+    const job = (async () => {
+      try {
+        const env = opts.env ?? process.env
+        const id = resolveTaskId(undefined, env, opts.agent)
+        if (!id || !env.NEO_TASK_TOKEN)
+          throw new Error('task credentials required')
+        const res = await fetchImpl(
+          `${env.NEO_BROKER_URL ?? 'http://broker:8091'}/request`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            signal: AbortSignal.any([
+              lifecycle.signal,
+              AbortSignal.timeout(30000),
+            ]),
+            body: JSON.stringify({
+              task_id: id,
+              task_token: env.NEO_TASK_TOKEN,
+              capability: 'browser',
+              url: request.url,
+              method: request.method,
+              headers: request.headers,
+              body_base64:
+                request.postData === undefined
+                  ? undefined
+                  : Buffer.from(request.postData).toString('base64'),
+            }),
+          },
+        )
+        if (res.status !== 200)
+          throw new Error(`broker denied browser request (${res.status})`)
+        const response = JSON.parse(await res.text()) as {
+          status: number
+          headers: Record<string, string | string[]>
+          body_base64: string
+        }
+        if (
+          !Number.isInteger(response.status) ||
+          typeof response.body_base64 !== 'string' ||
+          response.body_base64.length > 2800000
+        )
+          throw new Error('invalid or oversized broker response')
+        await conn.send('Fetch.fulfillRequest', {
+          requestId,
+          responseCode: response.status,
+          responseHeaders: Object.entries(response.headers).flatMap(
+            ([name, value]) =>
+              (Array.isArray(value) ? value : [value]).map((v) => ({
+                name,
+                value: v,
+              })),
+          ),
+          body: response.body_base64,
+        })
+        if (requests.length >= 1000) throw new Error('capture quota exceeded')
+        const rec: CapturedRequest = {
+          id: (opts.randomId ?? randomUUID)(),
+          timestamp: new Date().toISOString(),
+          ...request,
+          status: response.status,
+        }
+        captureBytes += Buffer.byteLength(JSON.stringify(rec))
+        if (
+          captureBytes > 16777216 ||
+          Buffer.byteLength(JSON.stringify(rec)) > 262144
+        )
+          throw new Error('capture record exceeds quota')
+        requests.push(rec)
+        writes = writes
+          .then(() => appendTraffic(rec, opts))
+          .catch((err) => {
+            captureError = err
+          })
+      } catch (err) {
+        captureError = err
+        await conn
+          .send('Fetch.failRequest', {
+            requestId,
+            errorReason: 'BlockedByClient',
+          })
+          .catch(() => {})
+      }
+    })()
+    activeRequests.add(job)
+    void job.finally(() => activeRequests.delete(job))
   })
-  conn.on('Network.responseReceived', (params) => {
-    const rec = typeof params.requestId === 'string' ? byNetworkId.get(params.requestId) : undefined
-    const response = params.response as { status?: number } | undefined
-    if (rec && typeof response?.status === 'number') rec.status = response.status
+  await conn.send('Fetch.enable', {
+    patterns: [{ urlPattern: '*', requestStage: 'Request' }],
   })
-
+  const evaluate = async (expression: string) => {
+    const out = (await conn.send('Runtime.evaluate', {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+    })) as {
+      result?: { value?: unknown }
+      exceptionDetails?: { text?: string; exception?: { description?: string } }
+    }
+    if (out.exceptionDetails)
+      throw new Error(
+        out.exceptionDetails.exception?.description ??
+          out.exceptionDetails.text ??
+          'evaluation failed',
+      )
+    return out.result?.value
+  }
   return {
-    async navigate(url, _wait) {
-      await conn.send('Page.navigate', { url })
-      const title = await conn.send('Runtime.evaluate', {
-        expression: 'document.title',
-        returnByValue: true,
-      }) as { result?: { value?: unknown } }
-      return { url, title: typeof title?.result?.value === 'string' ? title.result.value : undefined }
+    async navigate(url, wait) {
+      if (wait && !['load', 'domcontentloaded', 'commit'].includes(wait))
+        throw new Error('unsupported navigation wait')
+      const loaded = conn.event(
+        wait === 'domcontentloaded'
+          ? 'Page.domContentEventFired'
+          : 'Page.loadEventFired',
+      )
+      try {
+        const result = (await conn.send('Page.navigate', { url })) as {
+          errorText?: string
+        }
+        if (result.errorText)
+          throw new Error(`navigation failed: ${result.errorText}`)
+        await loaded.promise
+      } finally {
+        loaded.cancel()
+      }
+      if (captureError) throw captureError
+      return {
+        url: String(await evaluate('location.href')),
+        title: String(await evaluate('document.title')),
+      }
     },
     async act(args) {
-      const selector = args.selector?.trim()
-      if (!selector) throw new Error('selector is required (instruction-only act needs a CSS selector)')
-      const selJson = JSON.stringify(selector)
-      if (args.action === 'click') {
-        await conn.send('Runtime.evaluate', {
-          expression: `document.querySelector(${selJson})?.click()`,
-          userGesture: true,
-        })
-      } else if (args.action === 'type') {
-        if (args.text === undefined) throw new Error('text is required for type')
-        const textJson = JSON.stringify(args.text)
-        await conn.send('Runtime.evaluate', {
-          expression: `(() => { const el = document.querySelector(${selJson}); if (!el) throw new Error('not found'); el.focus(); el.value = ${textJson}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); })()`,
-        })
-      } else if (args.action === 'select') {
-        if (args.text === undefined) throw new Error('text is required for select')
-        const textJson = JSON.stringify(args.text)
-        await conn.send('Runtime.evaluate', {
-          expression: `(() => { const el = document.querySelector(${selJson}); if (!el) throw new Error('not found'); el.value = ${textJson}; el.dispatchEvent(new Event('change', { bubbles: true })); })()`,
-        })
-      } else {
-        throw new Error(`unknown action: ${String(args.action)}`)
-      }
-      return { ok: true as const }
+      if (!args.selector) throw new Error('selector is required')
+      const action =
+        args.action === 'click'
+          ? 'el.click()'
+          : `el.value=${JSON.stringify(args.text)}; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true}))`
+      if (args.action !== 'click' && args.text === undefined)
+        throw new Error('text is required')
+      await evaluate(
+        `(()=>{const el=document.querySelector(${JSON.stringify(args.selector)});if(!el)throw new Error('selector not found');${action}})()`,
+      )
+      return { ok: true }
     },
-    async evaluate(expression) {
-      const out = await conn.send('Runtime.evaluate', { expression, returnByValue: true }) as {
-        result?: { value?: unknown }
-        exceptionDetails?: { text?: string }
-      }
-      if (out?.exceptionDetails) throw new Error(out.exceptionDetails.text ?? 'eval failed')
-      return out?.result?.value
-    },
+    evaluate,
     async screenshot() {
-      const out = await conn.send('Page.captureScreenshot', { format: 'png' }) as { data?: string }
-      if (!out?.data) throw new Error('screenshot empty')
+      const out = (await conn.send('Page.captureScreenshot', {
+        format: 'png',
+      })) as { data?: string }
+      if (!out.data) throw new Error('empty screenshot')
       return Buffer.from(out.data, 'base64')
     },
     async network() {
-      return requests
+      await Promise.all(activeRequests)
+      await writes
+      if (captureError) throw captureError
+      return requests.map((r) => ({ ...r, headers: { ...r.headers } }))
+    },
+    alive() {
+      return !conn.closed
+    },
+    async close() {
+      lifecycle.abort()
+      conn.sessionId = undefined
+      try {
+        await conn.send('Target.disposeBrowserContext', {
+          browserContextId: context.browserContextId,
+        })
+      } finally {
+        conn.close()
+      }
+      await Promise.all(activeRequests)
+      await writes
     },
   }
 }
 
-export async function openBrowser(opts: ClientOptions = {}): Promise<BrowserSession> {
+export async function openBrowser(
+  opts: ClientOptions = {},
+): Promise<BrowserSession> {
   if (opts.session) return opts.session
-  if (opts.playwright || opts.importPlaywright) return connectPlaywright(opts)
-  try {
-    return await connectPlaywright(opts)
-  } catch {
-    return connectCdp(opts)
-  }
+  return connectCdp(opts)
 }
-
-export async function getBrowserSession(opts: ClientOptions = {}): Promise<BrowserSession> {
+export async function getBrowserSession(
+  opts: ClientOptions = {},
+): Promise<BrowserSession> {
   if (opts.session) return opts.session
-  if (!cachedSession) {
-    cachedSession = openBrowser(opts).catch((err) => {
-      cachedSession = undefined
+  const key = `${taskRoot(opts)}:${cdpUrl(opts)}:${opts.agent?.id ?? 'main'}`
+  let session = sessions.get(key)
+  if (!session) {
+    if (sessions.size >= 16)
+      throw new Error('browser session quota exceeded; close idle sessions')
+    session = openBrowser({ ...opts, signal: undefined }).catch((err) => {
+      sessions.delete(key)
       throw err
     })
+    sessions.set(key, session)
+    const owned = session
+    const timer = setTimeout(
+      () => {
+        if (sessions.get(key) === owned) {
+          sessions.delete(key)
+          void owned.then((s) => s.close?.()).catch(() => {})
+        }
+      },
+      30 * 60 * 1000,
+    )
+    ;(timer as unknown as { unref?: () => void }).unref?.()
   }
-  return cachedSession
+  const resolved = await session
+  if (resolved.alive && !resolved.alive()) {
+    sessions.delete(key)
+    return getBrowserSession(opts)
+  }
+  return resolved
 }
 
 export async function browserNavigate(
@@ -565,22 +754,38 @@ export async function browserNavigate(
   throwIfAborted(opts.signal)
   const url = args.url.trim()
   if (!url) throw new Error('url is required')
-  await assertInScope(url, opts)
+  const canonical = new URL(url)
+  if (
+    !['http:', 'https:'].includes(canonical.protocol) ||
+    canonical.username ||
+    canonical.password
+  )
+    throw new Error(
+      'browser navigation requires HTTP(S) URL without embedded credentials',
+    )
+  if (opts.session) await assertInScope(url, opts)
   const session = await getBrowserSession(opts)
-  return session.navigate(url, args.wait)
+  return runOperation(session, () => session.navigate(url, args.wait), opts)
 }
 
 export async function browserAct(
-  args: { action: 'click' | 'type' | 'select'; selector?: string; text?: string; instruction: string },
+  args: {
+    action: 'click' | 'type' | 'select'
+    selector?: string
+    text?: string
+    instruction: string
+  },
   opts: ClientOptions = {},
 ): Promise<ActResult> {
   throwIfAborted(opts.signal)
   if (!args.instruction?.trim()) throw new Error('instruction is required')
   if (!args.selector?.trim()) {
-    throw new Error('selector is required (instruction-only act needs a CSS selector)')
+    throw new Error(
+      'selector is required (instruction-only act needs a CSS selector)',
+    )
   }
   const session = await getBrowserSession(opts)
-  return session.act(args)
+  return runOperation(session, () => session.act(args), opts)
 }
 
 export async function browserEval(
@@ -591,24 +796,68 @@ export async function browserEval(
   const expression = args.expression.trim()
   if (!expression) throw new Error('expression is required')
   const session = await getBrowserSession(opts)
-  return { result: await session.evaluate(expression) }
+  return {
+    result: await runOperation(
+      session,
+      () => session.evaluate(expression),
+      opts,
+    ),
+  }
 }
 
-export async function browserScreenshot(opts: ClientOptions = {}): Promise<ScreenshotResult> {
+export async function browserScreenshot(
+  opts: ClientOptions = {},
+): Promise<ScreenshotResult> {
   throwIfAborted(opts.signal)
   const session = await getBrowserSession(opts)
-  const bytes = await session.screenshot()
-  const dir = (opts.screenshotDir ?? opts.env?.BROWSER_SCREENSHOT_DIR ?? DEFAULT_SCREENSHOT_DIR).replace(/\/+$/, '')
-  const stamp = (opts.now ?? (() => new Date()))().toISOString().replace(/[:.]/g, '-')
-  const path = `${dir}/screenshot-${stamp}.png`
+  const bytes = await runOperation(session, () => session.screenshot(), opts)
+  const dir = (opts.screenshotDir ?? `${taskRoot(opts)}/browser`).replace(
+    /\/+$/,
+    '',
+  )
+  const stamp = (opts.now ?? (() => new Date()))()
+    .toISOString()
+    .replace(/[:.]/g, '-')
+  const path = `${dir}/screenshot-${stamp}-${(opts.randomId ?? randomUUID)()}.png`
   const fs = opts.fs ?? nodeFs()
   await fs.mkdir(dir, { recursive: true })
   await fs.writeFile(path, bytes)
   return { path }
 }
 
-export async function browserNetwork(opts: ClientOptions = {}): Promise<NetworkResult> {
+export async function browserNetwork(
+  opts: ClientOptions = {},
+): Promise<NetworkResult> {
   throwIfAborted(opts.signal)
   const session = await getBrowserSession(opts)
-  return { requests: await session.network() }
+  return {
+    requests: await runOperation(session, () => session.network(), opts),
+  }
+}
+
+async function runOperation<T>(
+  session: BrowserSession,
+  operation: () => Promise<T>,
+  opts: ClientOptions,
+): Promise<T> {
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, AbortSignal.timeout(35000)])
+    : AbortSignal.timeout(35000)
+  throwIfAborted(signal)
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      for (const [key, p] of sessions)
+        void p.then((s) => {
+          if (s === session) sessions.delete(key)
+        })
+      void session.close?.().catch(() => {})
+      const err = new Error('browser operation aborted')
+      err.name = 'AbortError'
+      reject(err)
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    operation()
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener('abort', abort))
+  })
 }

@@ -45,7 +45,10 @@ export const SPECIALIST_OUTPUT_SCHEMA = {
   properties: {
     summary: { type: 'string' },
     artifacts: { type: 'array', items: { type: 'string' } },
-    findings_claimed: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    findings_claimed: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+    },
     next_agent: { type: 'string' },
     blockers: { type: 'array', items: { type: 'string' } },
   },
@@ -59,24 +62,34 @@ export class PresetError extends Error {
   }
 }
 
-export function resolvePresetsDir(env: Record<string, string | undefined> = process.env, cwd = process.cwd()): string {
-  if (env.NEO_PRESETS_DIR && env.NEO_PRESETS_DIR.trim() !== '') return env.NEO_PRESETS_DIR
+export function resolvePresetsDir(
+  env: Record<string, string | undefined> = process.env,
+  cwd = process.cwd(),
+): string {
+  if (env.NEO_PRESETS_DIR && env.NEO_PRESETS_DIR.trim() !== '')
+    return env.NEO_PRESETS_DIR
   const here = dirname(fileURLToPath(import.meta.url))
-  return [
-    join(here, '../../../presets'),
-    join(cwd, 'presets'),
-    '/opt/neo/presets',
-  ].find((dir) => {
-    try {
-      return readdirSync(dir).some((name) => name.endsWith('.yml') || name.endsWith('.yaml'))
-    } catch {
-      return false
-    }
-  }) ?? join(cwd, 'presets')
+  return (
+    [
+      join(here, '../../../presets'),
+      join(cwd, 'presets'),
+      '/opt/neo/presets',
+    ].find((dir) => {
+      try {
+        return readdirSync(dir).some(
+          (name) => name.endsWith('.yml') || name.endsWith('.yaml'),
+        )
+      } catch {
+        return false
+      }
+    }) ?? join(cwd, 'presets')
+  )
 }
 
 export function loadPresetsFromDir(dir: string): Map<string, AgentPreset> {
-  const names = readdirSync(dir).filter((n) => n.endsWith('.yml') || n.endsWith('.yaml'))
+  const names = readdirSync(dir).filter(
+    (n) => n.endsWith('.yml') || n.endsWith('.yaml'),
+  )
   const presets = new Map<string, AgentPreset>()
   for (const name of names) {
     const raw = readFileSync(join(dir, name), 'utf8')
@@ -89,15 +102,22 @@ export function loadPresetsFromDir(dir: string): Map<string, AgentPreset> {
   return presets
 }
 
-export function parsePresetYaml(source: string, filenameId?: string): AgentPreset {
+export function parsePresetYaml(
+  source: string,
+  filenameId?: string,
+): AgentPreset {
   const value = parseYaml(source)
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new PresetError('preset yaml must be a mapping')
   }
   const rec = value as Record<string, unknown>
   const id = requiredString(rec, 'id')
+  if (!/^[a-z][a-z0-9-]{0,63}$/.test(id))
+    throw new PresetError('invalid preset id')
   if (filenameId && filenameId !== id) {
-    throw new PresetError(`preset id ${id} does not match filename ${filenameId}`)
+    throw new PresetError(
+      `preset id ${id} does not match filename ${filenameId}`,
+    )
   }
   const tool_allowlist = requiredStringArray(rec, 'tool_allowlist')
   const skills = optionalStringArray(rec, 'skills')
@@ -114,22 +134,30 @@ export function parsePresetYaml(source: string, filenameId?: string): AgentPrese
   }
 }
 
-export function getPreset(presets: Map<string, AgentPreset>, agentId: string): AgentPreset {
+export function getPreset(
+  presets: Map<string, AgentPreset>,
+  agentId: string,
+): AgentPreset {
   const preset = presets.get(agentId)
   if (!preset) {
     const known = [...presets.keys()].sort().join(', ')
-    throw new PresetError(`unknown agent_id: ${agentId}${known ? ` (known: ${known})` : ''}`)
+    throw new PresetError(
+      `unknown agent_id: ${agentId}${known ? ` (known: ${known})` : ''}`,
+    )
   }
   return preset
 }
 
-export function failClosedReason(preset: AgentPreset, env: Record<string, string | undefined>): string | undefined {
-  if (preset.id === 'android' && !env.ANDROID_SERIAL) {
-    return 'Android hardware not attached. Set ANDROID_SERIAL to enable this agent; swarm continues without it.'
-  }
-  if (preset.id === 'ios' && !env.IOS_SSH_HOST) {
-    return 'iOS lab not attached. Set IOS_SSH_HOST to enable this agent; swarm continues without it.'
-  }
+export function failClosedReason(
+  preset: AgentPreset,
+  env: Record<string, string | undefined>,
+): string | undefined {
+  if (preset.id === 'android')
+    return 'Android hardware passthrough is unavailable in the constrained broker; environment strings do not enable it.'
+  if (preset.id === 'ios')
+    return 'iOS device/SSH routing is unavailable in the constrained broker; environment strings do not enable it.'
+  if (preset.id === 'ghidra')
+    return 'Ghidra has no validated agent integration in this runtime; binary decompilation is unavailable.'
   return undefined
 }
 
@@ -143,11 +171,15 @@ function requiredString(rec: Record<string, unknown>, key: string): string {
 
 function requiredBoolean(rec: Record<string, unknown>, key: string): boolean {
   const v = rec[key]
-  if (typeof v !== 'boolean') throw new PresetError(`preset missing boolean field ${key}`)
+  if (typeof v !== 'boolean')
+    throw new PresetError(`preset missing boolean field ${key}`)
   return v
 }
 
-function requiredPositiveInt(rec: Record<string, unknown>, key: string): number {
+function requiredPositiveInt(
+  rec: Record<string, unknown>,
+  key: string,
+): number {
   const v = rec[key]
   if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) {
     throw new PresetError(`preset ${key} must be a positive integer`)
@@ -155,7 +187,10 @@ function requiredPositiveInt(rec: Record<string, unknown>, key: string): number 
   return v
 }
 
-function requiredStringArray(rec: Record<string, unknown>, key: string): string[] {
+function requiredStringArray(
+  rec: Record<string, unknown>,
+  key: string,
+): string[] {
   const v = rec[key]
   if (!Array.isArray(v) || v.some((item) => typeof item !== 'string')) {
     throw new PresetError(`preset ${key} must be a string array`)
@@ -163,7 +198,10 @@ function requiredStringArray(rec: Record<string, unknown>, key: string): string[
   return v as string[]
 }
 
-function optionalStringArray(rec: Record<string, unknown>, key: string): string[] {
+function optionalStringArray(
+  rec: Record<string, unknown>,
+  key: string,
+): string[] {
   const v = rec[key]
   if (v == null) return []
   if (!Array.isArray(v) || v.some((item) => typeof item !== 'string')) {
@@ -174,8 +212,17 @@ function optionalStringArray(rec: Record<string, unknown>, key: string): string[
 
 export function assertJudgeAllowlist(preset: AgentPreset): void {
   if (preset.id !== 'judge') return
-  const banned = ['bash', 'sandbox_exec', 'oast_register', 'oast_poll',
-    'browser_navigate', 'browser_act', 'browser_eval', 'browser_screenshot', 'browser_network']
+  const banned = [
+    'bash',
+    'sandbox_exec',
+    'oast_register',
+    'oast_poll',
+    'browser_navigate',
+    'browser_act',
+    'browser_eval',
+    'browser_screenshot',
+    'browser_network',
+  ]
   const hit = preset.tool_allowlist.filter((t) => banned.includes(t))
   if (hit.length > 0) {
     throw new PresetError(`judge must not allow ${hit.join(', ')}`)
@@ -185,7 +232,11 @@ export function assertJudgeAllowlist(preset: AgentPreset): void {
 export type OrchestrationMode = 'fast' | 'thorough'
 
 export function normalizeMode(mode?: string | null): OrchestrationMode {
-  return String(mode ?? '').trim().toLowerCase() === 'fast' ? 'fast' : 'thorough'
+  return String(mode ?? '')
+    .trim()
+    .toLowerCase() === 'fast'
+    ? 'fast'
+    : 'thorough'
 }
 
 /** Mode machine as prompt + delegate policy (not a second orchestration loop). */
@@ -195,7 +246,7 @@ export function buildModeMachinePrompt(mode: string = 'thorough'): string {
     'Mode machine (prompt + delegate policy; not a second orchestration loop).',
     `Active mode: ${active}.`,
     'Always confirm allowlist + authorization; call scope_check before delegate.',
-    'Pass mode, allowlist, denylist, secrets-by-reference, and /workspace paths to every child.',
+    'Pass persisted mode, approved allowlist, denylist, secrets-by-reference, and configured task/run paths to every child.',
     'Task memory is injected into every child on subagent/start (agent.inject).',
   ]
 
@@ -209,28 +260,45 @@ export function buildModeMachinePrompt(mode: string = 'thorough'): string {
   const thorough = [
     'Thorough mode steps:',
     '1. Clarify scope with the user until targets and constraints are concrete.',
-    '2. Delegate planner; planner spawns explore×3 via parallel_group (optional browser for visual recon).',
-    '3. Planner writes /workspace/plan.md; call ask_user_question to get explicit user approval before delegate(swarm).',
+    '2. Delegate planner; planner spawns read-only explore×3 via parallel_group.',
+    '3. Planner writes its task-owned plan.md and calls plan_submit with the current revision. The operator uses control operator approve with the current task revision and plan_revision; persisted explicit user approval is required before delegate(swarm).',
     '4. After approval, delegate swarm to decompose and run specialist workstreams.',
     '5. Delegate judge; judge may only spawn ≤5 verifiers (parallel_group capped by max_parallel).',
-    '6. issue_create only for confirmed findings (never unverified in Thorough).',
+    '6. issue_create records attributed unverified candidates. Independent verifier calls verification_record for the persisted candidate revision and evidence; issue_update promotes to confirmed using that verification_id and revision.',
     '7. Write /workspace/report.md.',
     '8. If judge returns needs retry: max 2 re-executions; write /workspace/verification/iteration-N.md each time.',
   ]
 
   if (active === 'fast') {
-    return [...header, ...fast, 'Thorough reference (skipped in Fast):', ...thorough.slice(1)].join('\n')
+    return [
+      ...header,
+      ...fast,
+      'Thorough reference (skipped in Fast):',
+      ...thorough.slice(1),
+    ].join('\n')
   }
-  return [...header, ...thorough, 'Fast reference (not active):', ...fast.slice(1)].join('\n')
+  return [
+    ...header,
+    ...thorough,
+    'Fast reference (not active):',
+    ...fast.slice(1),
+  ].join('\n')
 }
 
 export function isSpecialistScope(scope: unknown): boolean {
   if (!scope || typeof scope !== 'object') return false
   const rec = scope as { options?: { neoAgentId?: unknown }; label?: unknown }
-  const id = typeof rec.options?.neoAgentId === 'string'
-    ? rec.options.neoAgentId
-    : typeof rec.label === 'string' ? rec.label : ''
-  return id !== '' && id !== 'orchestrator' && (REQUIRED_PRESET_IDS as readonly string[]).includes(id)
+  const id =
+    typeof rec.options?.neoAgentId === 'string'
+      ? rec.options.neoAgentId
+      : typeof rec.label === 'string'
+        ? rec.label
+        : ''
+  return (
+    id !== '' &&
+    id !== 'orchestrator' &&
+    (REQUIRED_PRESET_IDS as readonly string[]).includes(id)
+  )
 }
 
 export function catalogPrompt(
@@ -239,7 +307,10 @@ export function catalogPrompt(
 ): string {
   const rows = [...presets.values()]
     .sort((a, b) => a.id.localeCompare(b.id))
-    .map((p) => `- ${p.id} (max_parallel=${p.max_parallel}${p.readonly ? ', readonly' : ''}): ${p.when_to_use}`)
+    .map(
+      (p) =>
+        `- ${p.id} (max_parallel=${p.max_parallel}${p.readonly ? ', readonly' : ''}): ${p.when_to_use}`,
+    )
     .join('\n')
   return [
     'You are the Neo orchestrator. Never pentest yourself. Always pass the authorized allowlist to children.',
@@ -261,5 +332,8 @@ export function catalogSectionText(
   mode: string = process.env.NEO_MODE || 'thorough',
 ): string {
   if (isSpecialistScope(context?.scope)) return ''
-  return catalogPrompt(presets, mode)
+  return catalogPrompt(presets, mode).replaceAll(
+    '/workspace',
+    process.env.NEO_WORKSPACE || '/workspace',
+  )
 }

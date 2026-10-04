@@ -15,7 +15,10 @@ export type ToolDef = {
   parameters: Record<string, unknown>
   output: {
     schema: unknown
-    render: (args: unknown, value: unknown) => Array<{ type: 'text'; text: string }>
+    render: (
+      args: unknown,
+      value: unknown,
+    ) => Array<{ type: 'text'; text: string }>
   }
   execute: (
     args: Record<string, unknown>,
@@ -49,12 +52,17 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
     {
       name: 'browser_navigate',
       description:
-        'Navigate the shared CDP browser (http://browser:9222) to a URL. Calls Control /scope/check first; throws if out of scope.',
+        'Navigate an isolated task browser page. Every network request is authorized and mediated by the broker.',
       parameters: {
-        url: { type: 'string', required: true, description: 'Absolute URL to open.' },
+        url: {
+          type: 'string',
+          required: true,
+          description: 'Absolute URL to open.',
+        },
         wait: {
           type: 'string',
-          description: 'Playwright waitUntil: load (default), domcontentloaded, networkidle, commit.',
+          description:
+            'Navigation lifecycle: load (default), domcontentloaded, or commit.',
         },
       },
       output: {
@@ -89,9 +97,19 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
           enum: ['click', 'type', 'select'],
           description: 'DOM action.',
         },
-        selector: { type: 'string', description: 'CSS selector for the target element.' },
-        text: { type: 'string', description: 'Text to type or option value to select.' },
-        instruction: { type: 'string', required: true, description: 'What this action is trying to do.' },
+        selector: {
+          type: 'string',
+          description: 'CSS selector for the target element.',
+        },
+        text: {
+          type: 'string',
+          description: 'Text to type or option value to select.',
+        },
+        instruction: {
+          type: 'string',
+          required: true,
+          description: 'What this action is trying to do.',
+        },
       },
       output: {
         schema: {
@@ -102,13 +120,17 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         render: renderSafe,
       },
       async execute(args, exec) {
-        const action = args.action === 'type' || args.action === 'select' || args.action === 'click'
-          ? args.action
-          : 'click'
+        const action =
+          args.action === 'type' ||
+          args.action === 'select' ||
+          args.action === 'click'
+            ? args.action
+            : 'click'
         return browserAct(
           {
             action,
-            selector: typeof args.selector === 'string' ? args.selector : undefined,
+            selector:
+              typeof args.selector === 'string' ? args.selector : undefined,
             text: typeof args.text === 'string' ? args.text : undefined,
             instruction: String(args.instruction ?? ''),
           },
@@ -118,9 +140,14 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
     },
     {
       name: 'browser_eval',
-      description: 'Evaluate a JavaScript expression in the current page and return the JSON-serializable result.',
+      description:
+        'Evaluate a JavaScript expression in the current page and return the JSON-serializable result.',
       parameters: {
-        expression: { type: 'string', required: true, description: 'JavaScript expression.' },
+        expression: {
+          type: 'string',
+          required: true,
+          description: 'JavaScript expression.',
+        },
       },
       output: {
         schema: {
@@ -139,7 +166,8 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
     },
     {
       name: 'browser_screenshot',
-      description: 'Capture a PNG screenshot via CDP and write it to /workspace/browser/.',
+      description:
+        'Capture a PNG screenshot via CDP and write it to the task-owned browser directory.',
       parameters: {},
       output: {
         schema: {
@@ -150,12 +178,17 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         render: renderSafe,
       },
       async execute(_args, exec) {
-        return browserScreenshot({ ...options, signal: exec.signal, agent: agentOpt(exec) })
+        return browserScreenshot({
+          ...options,
+          signal: exec.signal,
+          agent: agentOpt(exec),
+        })
       },
     },
     {
       name: 'browser_network',
-      description: 'Return HTTP requests captured from the current browser session (also appended to /workspace/traffic/http.jsonl).',
+      description:
+        'Return HTTP requests captured from the current browser session (also appended to task-owned traffic JSONL).',
       parameters: {},
       output: {
         schema: {
@@ -168,7 +201,11 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         render: renderSafe,
       },
       async execute(_args, exec) {
-        return browserNetwork({ ...options, signal: exec.signal, agent: agentOpt(exec) })
+        return browserNetwork({
+          ...options,
+          signal: exec.signal,
+          agent: agentOpt(exec),
+        })
       },
     },
   ]

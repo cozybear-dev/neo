@@ -1,413 +1,223 @@
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
 import {
-  browserAct,
-  browserEval,
-  browserNavigate,
-  browserNetwork,
-  browserScreenshot,
   connectCdp,
-  connectPlaywright,
+  browserEval,
   resolveTaskId,
+  taskRoot,
+  renderSafe,
   rewriteCdpWebSocketUrl,
-  ScopeDeniedError,
-  type BrowserSession,
-  type FetchLike,
-  type FsLike,
-  type PlaywrightLike,
-  type PlaywrightPage,
-  type WsLike,
 } from './client.ts'
-import { createTools } from './tools.ts'
-
-function memFs(): FsLike & { files: Map<string, string | Uint8Array> } {
-  const files = new Map<string, string | Uint8Array>()
-  return {
-    files,
-    async mkdir() {},
-    async writeFile(path, data) {
-      files.set(path, data)
-    },
-    async appendFile(path, data) {
-      const prev = files.get(path)
-      const prevS = prev === undefined ? '' : typeof prev === 'string' ? prev : Buffer.from(prev).toString('utf8')
-      files.set(path, prevS + data)
-    },
+const id = '11111111-1111-4111-8111-111111111111'
+const env = {
+  NEO_TASK_ID: id,
+  NEO_TASK_TOKEN: 'fixture-token',
+  NEO_WORKSPACE_BASE: '/tmp/neo',
+}
+class Socket {
+  static sockets: Socket[] = []
+  readyState = 1
+  handlers = new Map<string, Function[]>()
+  messages: any[] = []
+  constructor(url: string) {
+    Socket.sockets.push(this)
+  }
+  addEventListener(name: string, fn: Function) {
+    this.handlers.set(name, [...(this.handlers.get(name) ?? []), fn])
+  }
+  emit(method: string, params: any = {}) {
+    for (const fn of this.handlers.get('message') ?? [])
+      fn({ data: JSON.stringify({ method, params }) })
+  }
+  close() {
+    for (const fn of this.handlers.get('close') ?? []) fn({})
+  }
+  send(raw: string) {
+    const msg = JSON.parse(raw)
+    this.messages.push(msg)
+    let result: any = {}
+    if (msg.method === 'Target.createBrowserContext')
+      result = { browserContextId: 'context-' + Socket.sockets.length }
+    if (msg.method === 'Target.createTarget') result = { targetId: 'target' }
+    if (msg.method === 'Target.attachToTarget')
+      result = { sessionId: 'attached' }
+    if (msg.method === 'Runtime.evaluate')
+      result = msg.params.expression.includes('missing')
+        ? { exceptionDetails: { text: 'selector not found' } }
+        : { result: { value: 'ok' } }
+    queueMicrotask(() => {
+      for (const fn of this.handlers.get('message') ?? [])
+        fn({ data: JSON.stringify({ id: msg.id, result }) })
+      if (msg.method === 'Page.navigate') this.emit('Page.loadEventFired')
+    })
   }
 }
-
-function allowFetch(extra?: { calls?: Array<{ url: string; body: unknown }> }): FetchLike {
-  const calls = extra?.calls
-  return async (url, init) => {
-    if (init?.signal?.aborted) {
-      const err = new Error('aborted')
-      err.name = 'AbortError'
-      throw err
-    }
-    if (calls) {
-      calls.push({ url, body: init?.body ? JSON.parse(init.body) : null })
-    }
-    if (url.includes('/scope/check')) {
-      return { status: 200, text: async () => JSON.stringify({ allowed: true, matched: 'juice-shop', reason: 'matched allowlist' }) }
-    }
-    return { status: 200, text: async () => '{}' }
-  }
-}
-
-function denyFetch(): FetchLike {
-  return async (url) => {
-    if (url.includes('/scope/check')) {
-      return {
-        status: 200,
-        text: async () => JSON.stringify({ allowed: false, matched: '', reason: 'default deny: no allowlist match' }),
-      }
-    }
-    return { status: 200, text: async () => '{}' }
-  }
-}
-
-function fakeSession(overrides: Partial<BrowserSession> = {}): BrowserSession & { calls: string[] } {
-  const calls: string[] = []
-  const requests = [
-    {
-      id: 'n1',
-      method: 'GET',
-      url: 'http://juice-shop.lab.internal/',
-      headers: {},
-      timestamp: '2026-08-20T00:00:00.000Z',
-    },
-  ]
+function setup(status = 200, diskFail = false) {
+  let saved = ''
+  const calls: any[] = []
   return {
     calls,
-    async navigate(url, wait) {
-      calls.push(`goto:${url}:${wait ?? ''}`)
-      return { url, title: 'Juice Shop' }
+    get saved() {
+      return saved
     },
-    async act(args) {
-      calls.push(`${args.action}:${args.selector}:${args.text ?? ''}`)
-      return { ok: true }
+    opts: {
+      env,
+      ws: Socket as any,
+      fs: {
+        mkdir: async () => {},
+        writeFile: async () => {},
+        appendFile: async (_p: string, data: string) => {
+          if (diskFail) throw new Error('disk full')
+          saved += data
+        },
+      },
+      fetch: async (url: string, init?: any) => {
+        calls.push({ url, init })
+        return {
+          status: url.includes('/request') ? status : 200,
+          text: async () =>
+            JSON.stringify(
+              url.includes('/request')
+                ? { status: 201, headers: {}, body_base64: '' }
+                : {
+                    webSocketDebuggerUrl:
+                      'ws://127.0.0.1:9223/devtools/browser/x',
+                  },
+            ),
+        }
+      },
     },
-    async evaluate(expression) {
-      calls.push(`eval:${expression}`)
-      return { ok: true, expression }
-    },
-    async screenshot() {
-      calls.push('screenshot')
-      return Buffer.from('png-bytes')
-    },
-    async network() {
-      return requests
-    },
-    ...overrides,
   }
 }
-
-describe('browser_navigate', () => {
-  it('calls scope_check then navigates', async () => {
-    const session = fakeSession()
-    const scopeCalls: Array<{ url: string; body: unknown }> = []
-    const result = await browserNavigate(
-      { url: 'http://juice-shop.lab.internal/', wait: 'networkidle' },
-      {
-        session,
-        fetch: allowFetch({ calls: scopeCalls }),
-        env: {
-          CONTROL_URL: 'http://control:8090',
-          NEO_TASK_ID: 'ef2b412d-84ac-4cde-8330-bdfd04154c78',
-        },
-      },
-    )
-    assert.deepEqual(result, { url: 'http://juice-shop.lab.internal/', title: 'Juice Shop' })
-    assert.equal(scopeCalls[0]?.url, 'http://control:8090/scope/check')
-    assert.deepEqual(scopeCalls[0]?.body, {
-      target: 'juice-shop.lab.internal',
-      task_id: 'ef2b412d-84ac-4cde-8330-bdfd04154c78',
-    })
-    assert.equal(session.calls[0], 'goto:http://juice-shop.lab.internal/:networkidle')
-  })
-
-  it('resolveTaskId prefers agent.options.neoTaskId over the child session id', () => {
-    const parentTask = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
-    assert.equal(
-      resolveTaskId(undefined, {}, {
-        id: 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78',
-        options: { neoTaskId: parentTask },
+test('task identity fails closed and task directories are isolated', () => {
+  assert.throws(() => taskRoot({ env: {} }))
+  assert.throws(() => resolveTaskId('bad', env))
+  assert.throws(() =>
+    resolveTaskId('22222222-2222-4222-8222-222222222222', env),
+  )
+  assert.equal(taskRoot({ env }), `/tmp/neo/tasks/${id}`)
+})
+test('CDP creates own context and attaches flattened target before page commands', async () => {
+  const a = setup()
+  const session = await connectCdp(a.opts)
+  const socket = Socket.sockets.at(-1)!
+  assert.equal(socket.messages[0].method, 'Target.createBrowserContext')
+  assert.equal(
+    socket.messages[1].params.browserContextId.startsWith('context-'),
+    true,
+  )
+  assert.equal(
+    socket.messages.find((m) => m.method === 'Page.enable').sessionId,
+    'attached',
+  )
+  assert.equal((await session.navigate('http://lab/')).url, 'ok')
+  await assert.rejects(
+    () =>
+      session.act({
+        action: 'click',
+        selector: 'missing',
+        instruction: 'click',
       }),
-      parentTask,
-    )
-  })
-
-  it('posts agent.options.neoTaskId rather than the child session UUID', async () => {
-    const session = fakeSession()
-    const scopeCalls: Array<{ url: string; body: unknown }> = []
-    const parentTask = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
-    await browserNavigate(
-      { url: 'http://juice-shop.lab.internal/' },
-      {
-        session,
-        fetch: allowFetch({ calls: scopeCalls }),
-        env: { CONTROL_URL: 'http://control:8090' },
-        agent: {
-          id: 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78',
-          options: { neoTaskId: parentTask },
-        },
-      },
-    )
-    assert.deepEqual(scopeCalls[0]?.body, {
-      target: 'juice-shop.lab.internal',
-      task_id: parentTask,
-    })
-  })
-
-  it('throws on allowlist miss and does not navigate', async () => {
-    const session = fakeSession()
-    await assert.rejects(
-      () => browserNavigate(
-        { url: 'http://evil.example/' },
-        { session, fetch: denyFetch(), env: {} },
-      ),
-      (err: unknown) => {
-        assert.ok(err instanceof ScopeDeniedError)
-        assert.match(err.message, /evil\.example/)
-        return true
-      },
-    )
-    assert.equal(session.calls.length, 0)
-  })
-
-  it('honors abort signal', async () => {
-    const ac = new AbortController()
-    ac.abort()
-    await assert.rejects(
-      () => browserNavigate({ url: 'http://juice-shop/' }, { session: fakeSession(), signal: ac.signal, skipScopeCheck: true }),
-      (err: unknown) => (err as Error).name === 'AbortError',
-    )
-  })
-
-  it('browser_navigate tool threads exec.agent into scope_check task_id', async () => {
-    const session = fakeSession()
-    const scopeCalls: Array<{ url: string; body: unknown }> = []
-    const [tool] = createTools({
-      session,
-      fetch: allowFetch({ calls: scopeCalls }),
-      env: { CONTROL_URL: 'http://control:8090' },
-    })
-    assert.equal(tool.name, 'browser_navigate')
-    await tool.execute(
-      { url: 'http://juice-shop.lab.internal/' },
-      {
-        signal: new AbortController().signal,
-        agent: { id: 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78' },
-      },
-    )
-    assert.deepEqual(scopeCalls[0]?.body, {
-      target: 'juice-shop.lab.internal',
-      task_id: 'ef2b412d-84ac-4cde-8330-bdfd04154c78',
-    })
-  })
+    /selector not found/,
+  )
+  await session.close!()
 })
-
-describe('browser_act / eval / screenshot / network', () => {
-  it('click/type/select dispatch to the session', async () => {
-    const session = fakeSession()
-    await browserAct({ action: 'click', selector: '#go', instruction: 'submit' }, { session })
-    await browserAct({ action: 'type', selector: '#q', text: 'xss', instruction: 'search' }, { session })
-    await browserAct({ action: 'select', selector: '#role', text: 'admin', instruction: 'pick role' }, { session })
-    assert.deepEqual(session.calls, ['click:#go:', 'type:#q:xss', 'select:#role:admin'])
+test('all paused requests go through task-auth broker and finalized capture is durable', async () => {
+  const a = setup()
+  const session = await connectCdp(a.opts)
+  const socket = Socket.sockets.at(-1)!
+  socket.emit('Fetch.requestPaused', {
+    requestId: 'r',
+    request: { url: 'http://lab/redirect', method: 'GET', headers: {} },
   })
-
-  it('requires a selector', async () => {
-    await assert.rejects(
-      () => browserAct({ action: 'click', instruction: 'click the login button' }, { session: fakeSession() }),
-      /selector/,
-    )
-  })
-
-  it('eval returns the page result', async () => {
-    const result = await browserEval({ expression: 'document.title' }, { session: fakeSession() })
-    assert.deepEqual(result, { result: { ok: true, expression: 'document.title' } })
-  })
-
-  it('screenshot writes PNG under /workspace/browser/', async () => {
-    const fs = memFs()
-    const result = await browserScreenshot({
-      session: fakeSession(),
-      fs,
-      now: () => new Date('2026-08-20T12:00:00.000Z'),
-    })
-    assert.equal(result.path, '/workspace/browser/screenshot-2026-08-20T12-00-00-000Z.png')
-    const bytes = fs.files.get(result.path)
-    assert.ok(bytes)
-    assert.equal(Buffer.from(bytes as Uint8Array).toString(), 'png-bytes')
-  })
-
-  it('network returns captured requests', async () => {
-    const result = await browserNetwork({ session: fakeSession() })
-    assert.equal(result.requests.length, 1)
-    assert.equal(result.requests[0]?.url, 'http://juice-shop.lab.internal/')
-  })
+  await new Promise((r) => setTimeout(r, 10))
+  const records = await session.network()
+  assert.equal(records[0].status, 201)
+  assert.equal(JSON.parse(a.saved).status, 201)
+  const payload = JSON.parse(
+    a.calls.find((c) => c.url.includes('/request')).init.body,
+  )
+  assert.equal(payload.task_token, 'fixture-token')
+  assert.equal(
+    socket.messages.some((m) => m.method === 'Fetch.continueRequest'),
+    false,
+  )
+  await session.close!()
 })
-
-describe('Playwright connectOverCDP', () => {
-  it('connects to http://browser:9222', async () => {
-    let connected = ''
-    const captured: Array<{ method: string; url: string }> = []
-    const page: PlaywrightPage = {
-      async goto(url) { return { url } },
-      async click() {},
-      async fill() {},
-      async selectOption() {},
-      async evaluate(_fn, arg) { return arg },
-      async screenshot() { return Buffer.from('x') },
-      url: () => 'http://juice-shop.lab.internal/',
-      async title() { return 'Shop' },
-      on(event, handler) {
-        if (event === 'request') {
-          ;(handler as (req: { method(): string; url(): string; headers(): Record<string, string>; postData(): string | null }) => void)({
-            method: () => 'GET',
-            url: () => 'http://juice-shop.lab.internal/assets/app.js',
-            headers: () => ({ accept: '*/*' }),
-            postData: () => null,
-          })
-        }
-      },
-    }
-    const playwright: PlaywrightLike = {
-      chromium: {
-        async connectOverCDP(endpoint) {
-          connected = endpoint
-          return {
-            contexts: () => [{ pages: () => [page], async newPage() { return page } }],
-            async newPage() { return page },
-          }
-        },
-      },
-    }
-    const fs = memFs()
-    const session = await connectPlaywright({
-      playwright,
-      fs,
-      trafficPath: '/workspace/traffic/http.jsonl',
-      randomId: () => 'cap-1',
-      now: () => new Date('2026-08-20T00:00:00.000Z'),
+test('out-of-scope redirect/subresource/eval request blocked without direct network fallback', async () => {
+  for (const url of [
+    'http://canary/redirect',
+    'http://canary/image',
+    'http://control:8090/',
+  ]) {
+    const a = setup(403)
+    const session = await connectCdp(a.opts)
+    const socket = Socket.sockets.at(-1)!
+    socket.emit('Fetch.requestPaused', {
+      requestId: 'blocked',
+      request: { url, method: 'GET', headers: {} },
     })
-    assert.equal(connected, 'http://browser:9222')
-    const net = await session.network()
-    assert.equal(net[0]?.id, 'cap-1')
-    assert.equal(net[0]?.url, 'http://juice-shop.lab.internal/assets/app.js')
-    const jsonl = fs.files.get('/workspace/traffic/http.jsonl')
-    assert.match(String(jsonl), /cap-1/)
-    captured.push({ method: net[0]!.method, url: net[0]!.url })
-    assert.equal(captured[0]?.method, 'GET')
-  })
-})
-
-describe('CDP fallback', () => {
-  it('rewrites 127.0.0.1 debugger URLs onto the compose host', () => {
+    await new Promise((r) => setTimeout(r, 5))
     assert.equal(
-      rewriteCdpWebSocketUrl('ws://127.0.0.1:9222/devtools/page/abc', 'http://browser:9222'),
-      'ws://browser:9222/devtools/page/abc',
+      socket.messages.some((m) => m.method === 'Fetch.failRequest'),
+      true,
     )
+    assert.equal(
+      socket.messages.some((m) => m.method === 'Fetch.continueRequest'),
+      false,
+    )
+    await assert.rejects(() => session.network(), /denied/)
+    await session.close!()
+  }
+})
+test('write failure is visible and disconnected sessions fail pending commands', async () => {
+  const a = setup(200, true)
+  const session = await connectCdp(a.opts)
+  const socket = Socket.sockets.at(-1)!
+  socket.emit('Fetch.requestPaused', {
+    requestId: 'r',
+    request: { url: 'http://lab/', method: 'GET', headers: {} },
   })
-
-  it('opens the page websocket and sends Page.navigate', async () => {
-    const sent: string[] = []
-    class FakeWs implements WsLike {
-      url: string
-      readyState = 0
-      onopen: ((ev: unknown) => void) | null = null
-      onmessage: ((ev: { data?: unknown }) => void) | null = null
-      onerror: ((ev: unknown) => void) | null = null
-      constructor(url: string) {
-        this.url = url
-        queueMicrotask(() => {
-          this.readyState = 1
-          this.onopen?.(null)
-        })
-      }
-      addEventListener(type: string, fn: (ev: { data?: unknown }) => void) {
-        if (type === 'open') queueMicrotask(() => fn({}))
-        if (type === 'message') this.onmessage = fn
-      }
-      send(data: string) {
-        sent.push(data)
-        const msg = JSON.parse(data) as { id: number; method: string }
-        const result = msg.method === 'Page.captureScreenshot'
-          ? { data: Buffer.from('png').toString('base64') }
-          : msg.method === 'Runtime.evaluate'
-            ? { result: { value: 'Juice Shop' } }
-            : {}
-        queueMicrotask(() => this.onmessage?.({ data: JSON.stringify({ id: msg.id, result }) }))
-      }
-      close() {}
-    }
-    const fetchImpl: FetchLike = async (url) => {
-      if (url.endsWith('/json/list')) {
-        return {
-          status: 200,
-          text: async () => JSON.stringify([
-            { type: 'page', webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/p1' },
-          ]),
-        }
-      }
-      return { status: 200, text: async () => '{}' }
-    }
-    const session = await connectCdp({
-      fetch: fetchImpl,
-      ws: FakeWs,
-      env: { BROWSER_CDP_URL: 'http://browser:9222' },
-      skipScopeCheck: true,
-    })
-    const nav = await session.navigate('http://juice-shop.lab.internal/')
-    assert.equal(nav.title, 'Juice Shop')
-    assert.ok(sent.some((s) => s.includes('Page.navigate')))
-    assert.ok(sent.some((s) => s.includes('http://juice-shop.lab.internal/')))
-    const shot = await session.screenshot()
-    assert.equal(Buffer.from(shot).toString(), 'png')
-  })
-
-  it('retries CDP /json/list after fetch failed', async () => {
-    let n = 0
-    class FakeWs implements WsLike {
-      readyState = 0
-      onopen: ((ev: unknown) => void) | null = null
-      onmessage: ((ev: { data?: unknown }) => void) | null = null
-      onerror: ((ev: unknown) => void) | null = null
-      constructor(_url: string) {
-        queueMicrotask(() => {
-          this.readyState = 1
-          this.onopen?.(null)
-        })
-      }
-      addEventListener(type: string, fn: (ev: { data?: unknown }) => void) {
-        if (type === 'open') queueMicrotask(() => fn({}))
-        if (type === 'message') this.onmessage = fn
-      }
-      send(data: string) {
-        const msg = JSON.parse(data) as { id: number; method: string }
-        queueMicrotask(() => this.onmessage?.({ data: JSON.stringify({ id: msg.id, result: {} }) }))
-      }
-      close() {}
-    }
-    const fetchImpl: FetchLike = async (url) => {
-      if (String(url).includes('/json/list')) {
-        n += 1
-        if (n < 3) throw new Error('fetch failed')
-        return {
-          status: 200,
-          text: async () => JSON.stringify([
-            { type: 'page', webSocketDebuggerUrl: 'ws://browser:9222/devtools/page/1' },
-          ]),
-        }
-      }
-      return { status: 200, text: async () => '{}' }
-    }
-    await connectCdp({
-      fetch: fetchImpl,
-      ws: FakeWs,
-      skipScopeCheck: true,
-      cdpUrl: 'http://browser:9222',
-    })
-    assert.equal(n, 3)
-  })
+  await new Promise((r) => setTimeout(r, 5))
+  await assert.rejects(() => session.network(), /disk full/)
+  socket.close()
+  await assert.rejects(() => session.evaluate('1'), /disconnected/)
+})
+test('cancellation closes context and rejects operation', async () => {
+  const controller = new AbortController()
+  let closed = false
+  const session = {
+    navigate: async () => ({ url: '' }),
+    act: async () => ({ ok: true as const }),
+    evaluate: () => new Promise(() => {}),
+    screenshot: async () => Buffer.from(''),
+    network: async () => [],
+    close: async () => {
+      closed = true
+    },
+  }
+  const pending = browserEval(
+    { expression: '1' },
+    { session, signal: controller.signal },
+  )
+  await new Promise((r) => setTimeout(r, 0))
+  controller.abort()
+  await assert.rejects(() => pending, /aborted/)
+  assert.equal(closed, true)
+})
+test('model rendering redacts URLs, bodies and headers', () => {
+  const text = renderSafe(
+    {},
+    {
+      url: 'http://lab/?token=fixture-secret',
+      postData: 'password=body-secret',
+      headers: { Authorization: 'header-secret' },
+    },
+  )[0].text
+  for (const secret of ['fixture-secret', 'body-secret', 'header-secret'])
+    assert.equal(text.includes(secret), false)
+  assert.equal(
+    rewriteCdpWebSocketUrl('ws://127.0.0.1:9223/x', 'http://browser:9222'),
+    'ws://browser:9222/x',
+  )
 })

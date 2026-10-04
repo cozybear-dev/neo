@@ -13,19 +13,41 @@ import { createTools as orchTools } from '../../plugins/neo-orchestrator/src/too
 import { createTools as workspaceTools } from '../../plugins/neo-fs-workspace/src/tools.ts'
 
 export const NEO_TOOL_NAMES = [
-  'scope_check', 'memory_get', 'memory_update', 'task_update',
-  'issue_create', 'issue_query', 'issue_update',
-  'oast_register', 'oast_poll',
+  'scope_check',
+  'memory_get',
+  'memory_update',
+  'task_update',
+  'task_get',
+  'issue_create',
+  'issue_query',
+  'issue_update',
+  'oast_register',
+  'oast_poll',
   'sandbox_exec',
-  'browser_navigate', 'browser_act', 'browser_eval', 'browser_screenshot', 'browser_network',
-  'traffic_search', 'traffic_replay',
-  'deploy_up', 'deploy_down',
+  'browser_navigate',
+  'browser_act',
+  'browser_eval',
+  'browser_screenshot',
+  'browser_network',
+  'traffic_search',
+  'traffic_replay',
+  'deploy_up',
+  'deploy_down',
   'delegate',
+  'plan_submit',
+  'verification_record',
   'list_dir',
 ] as const
 
 export const DSH_BUILTIN_TOOLS = [
-  'bash', 'read', 'write', 'glob', 'grep', 'skill', 'web_search',
+  'bash',
+  'read_image',
+  'read',
+  'write',
+  'glob',
+  'grep',
+  'skill',
+  'web_search',
 ] as const
 
 export { DSH_AGENT_PLANE_TOOLS } from '../../plugins/neo-orchestrator/src/delegate.ts'
@@ -40,7 +62,10 @@ export function allNeoToolDefs() {
     ...browserTools(),
     ...trafficTools(),
     ...deployTools(),
-    ...orchTools({ presets: undefined, workspaceDir: mkdtempSync(join(tmpdir(), 'neo-contract-')) }),
+    ...orchTools({
+      presets: undefined,
+      workspaceDir: mkdtempSync(join(tmpdir(), 'neo-contract-')),
+    }),
     ...workspaceTools({
       async resolve(path: string) {
         return { targetKey: path, displayPath: path }

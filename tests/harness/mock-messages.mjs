@@ -14,6 +14,8 @@ export function startMockMessages() {
     delegate: 0,
     parent_ok: 0,
     parent_failure: 0,
+    shell_guard: 0,
+    file_guard: 0,
   }
   let servedStructuredOutput = false
 
@@ -21,7 +23,15 @@ export function startMockMessages() {
     const path = req.url ?? '/'
     if (req.method !== 'POST' || !path.split('?')[0].endsWith('/v1/messages')) {
       res.writeHead(404, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: { message: 'not found', type: 'mock_error', code: 'not_found' } }))
+      res.end(
+        JSON.stringify({
+          error: {
+            message: 'not found',
+            type: 'mock_error',
+            code: 'not_found',
+          },
+        }),
+      )
       return
     }
     let raw = ''
@@ -31,7 +41,15 @@ export function startMockMessages() {
       body = JSON.parse(raw)
     } catch {
       res.writeHead(400, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: { message: 'invalid json', type: 'mock_error', code: 'invalid_request' } }))
+      res.end(
+        JSON.stringify({
+          error: {
+            message: 'invalid json',
+            type: 'mock_error',
+            code: 'invalid_request',
+          },
+        }),
+      )
       return
     }
     requests.push(body)
@@ -41,7 +59,15 @@ export function startMockMessages() {
     // the child may take one more step. Past this cap the script is looping.
     if (requests.length > 12) {
       res.writeHead(500, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: { message: 'too many requests', type: 'mock_error', code: 'loop' } }))
+      res.end(
+        JSON.stringify({
+          error: {
+            message: 'too many requests',
+            type: 'mock_error',
+            code: 'loop',
+          },
+        }),
+      )
       return
     }
     const names = toolNames(body)
@@ -58,18 +84,48 @@ export function startMockMessages() {
     if (names.has('structured_output')) {
       branches.structured_output += 1
       servedStructuredOutput = true
-      toolCall(res, 'mock-call-child', 'structured_output', JSON.stringify({
-        summary: 'HARNESS_CHILD_OK',
-        artifacts: [],
-      }))
+      toolCall(
+        res,
+        'mock-call-child',
+        'structured_output',
+        JSON.stringify({
+          summary: 'HARNESS_CHILD_OK',
+          artifacts: [],
+        }),
+      )
       return
     }
-    if (names.has('delegate') && !serialized.includes('tool_result')) {
+    if (names.has('delegate') && branches.shell_guard === 0) {
+      branches.shell_guard += 1
+      toolCall(
+        res,
+        'mock-shell-guard',
+        'bash',
+        JSON.stringify({ command: 'echo GUARD_MUST_BLOCK_THIS' }),
+      )
+      return
+    }
+    if (names.has('delegate') && branches.file_guard === 0) {
+      branches.file_guard += 1
+      toolCall(
+        res,
+        'mock-file-guard',
+        'read',
+        JSON.stringify({ file_path: '/etc/passwd' }),
+      )
+      return
+    }
+    if (names.has('delegate') && branches.delegate === 0) {
       branches.delegate += 1
-      toolCall(res, 'mock-call-parent', 'delegate', JSON.stringify({
-        agent_id: 'explore',
-        prompt: 'Return structured output only.',
-      }))
+      toolCall(
+        res,
+        'mock-call-parent',
+        'delegate',
+        JSON.stringify({
+          agent_id: 'explore',
+          prompt: 'Return structured output only.',
+        }),
+      )
       return
     }
     if (serialized.includes('HARNESS_CHILD_OK')) {
@@ -103,7 +159,9 @@ export function startMockMessages() {
 
 function toolNames(body) {
   const tools = Array.isArray(body?.tools) ? body.tools : []
-  return new Set(tools.map((tool) => tool?.name).filter((name) => typeof name === 'string'))
+  return new Set(
+    tools.map((tool) => tool?.name).filter((name) => typeof name === 'string'),
+  )
 }
 
 function openSse(response) {
@@ -140,7 +198,10 @@ function toolCall(response, id, name, argumentsJson) {
     index: 0,
     content_block: { type: 'tool_use', id, name, input: {} },
   })
-  for (const partial of [argumentsJson.slice(0, midpoint), argumentsJson.slice(midpoint)]) {
+  for (const partial of [
+    argumentsJson.slice(0, midpoint),
+    argumentsJson.slice(midpoint),
+  ]) {
     writeSse(response, {
       type: 'content_block_delta',
       index: 0,

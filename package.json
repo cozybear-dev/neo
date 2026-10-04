@@ -3,7 +3,27 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/unit/llm-settings.test.ts tests/unit/dsh-schema-compiler.test.ts tests/unit/neo-tools-contract.test.ts tests/unit/preset-tool-catalog.test.ts tests/unit/dsh-permission-mode.test.ts tests/unit/session-ef2b412d-regressions.test.ts tests/integration/modes.test.ts plugins/neo-tools-scope/src/index.test.ts plugins/neo-tools-memory/src/index.test.ts plugins/neo-tools-issues/src/index.test.ts plugins/neo-tools-oast/src/index.test.ts plugins/neo-sandbox-docker/src/index.test.ts plugins/neo-tools-browser/src/index.test.ts plugins/neo-tools-traffic/src/index.test.ts plugins/neo-tools-deploy/src/index.test.ts plugins/neo-summarizer/src/index.test.ts plugins/neo-orchestrator/src/index.test.ts plugins/neo-fs-workspace/src/index.test.ts",
-    "test:harness": "docker compose run --rm --no-deps -e DSH_HOME=/tmp/neo-harness-dsh -e NEO_WORKSPACE=/tmp/neo-harness-workspace dsh node /opt/neo/tests/harness/run.mjs"
+    "setup": "npm ci && npm --prefix control ci",
+    "build": "node scripts/build.mjs",
+    "typecheck": "node scripts/build.mjs --check",
+    "test": "node scripts/test.mjs",
+    "test:offline": "node scripts/test.mjs",
+    "test:control": "node scripts/test-control.mjs",
+    "test:harness": "node scripts/test-harness.mjs",
+    "check": "npm run typecheck && npm test && npm run test:control",
+    "check:release": "npm run check && npm run test:harness && npm run test:services && npm run test:worker",
+    "test:services": "node scripts/test-services.mjs",
+    "sbom": "node scripts/sbom.mjs",
+    "test:worker": "node scripts/test-worker.mjs"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dependencies": {
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "tsx": "4.20.3",
+    "typescript": "5.9.2"
   }
 }

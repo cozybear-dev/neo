@@ -10,3 +10,9 @@ coverage
 .env
 .env.local
 .env.*.local
+
+**/dist
+**/.neo-*
+
+.neo-task.json
+backups

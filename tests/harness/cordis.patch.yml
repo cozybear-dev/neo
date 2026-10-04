@@ -1,14 +1,7 @@
 # Harness-only overlay for `dsh --profile sdk`. Inserts the Neo plugins and
 # restates the sandbox rows that exist on dsh-base. The web profile's
 # webserver, web, and Exa rows are not on this profile.
-#
-# Neo plugin package.json files have a name and no version. The official
-# DeepSeek inventory refuses that identity and aborts the request before HTTP.
-# This run uses the native adapter only as a scripted Messages client.
-
-- id: plugin-package-inventory-deepseek
-  config:
-    enabled: false
+# Production plugin inventory remains enabled to validate package identities.
 
 - insert:
     - id: neo-tools-scope

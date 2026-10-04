@@ -1,0 +1,15 @@
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS token_hash TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS plan_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE task_memory ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS finder_run_id UUID;
+CREATE TABLE IF NOT EXISTS task_authorizations (id UUID PRIMARY KEY, task_id UUID NOT NULL REFERENCES tasks(id), revision INTEGER NOT NULL, actor TEXT NOT NULL, reason TEXT NOT NULL, policy JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS task_approvals (id UUID PRIMARY KEY, task_id UUID NOT NULL REFERENCES tasks(id), task_revision INTEGER NOT NULL, plan_revision INTEGER NOT NULL, actor TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS task_runs (id UUID PRIMARY KEY, task_id UUID NOT NULL REFERENCES tasks(id), parent_id UUID REFERENCES task_runs(id), role TEXT NOT NULL, token_hash TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS issue_verifications (id UUID PRIMARY KEY, issue_id UUID NOT NULL REFERENCES issues(id), issue_revision INTEGER NOT NULL, verifier_run_id UUID NOT NULL REFERENCES task_runs(id), outcome TEXT NOT NULL CHECK(outcome IN ('confirmed','false_positive','inconclusive')), evidence_paths TEXT[] NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS issue_history (id BIGSERIAL PRIMARY KEY, issue_id UUID NOT NULL REFERENCES issues(id), actor TEXT NOT NULL, change JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS issues_task_created_idx ON issues(task_id,created_at DESC,id);
+CREATE INDEX IF NOT EXISTS issue_history_issue_idx ON issue_history(issue_id,id);
+CREATE INDEX IF NOT EXISTS task_approvals_task_idx ON task_approvals(task_id,task_revision,plan_revision);

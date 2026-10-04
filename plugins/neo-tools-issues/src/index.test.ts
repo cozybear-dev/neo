@@ -1,130 +1,108 @@
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
-import { createIssue, queryIssues, resolveTaskId, updateIssue, type FetchLike } from './client.ts'
-
-function jsonFetch(
-  handler: (url: string, init?: Parameters<FetchLike>[1]) => { status: number; body: unknown },
-): FetchLike {
-  return async (url, init) => {
-    if (init?.signal?.aborted) {
-      const err = new Error('aborted')
-      err.name = 'AbortError'
-      throw err
-    }
-    const { status, body } = handler(url, init)
-    return { status, text: async () => JSON.stringify(body) }
-  }
-}
-
-describe('issue_create', () => {
-  it('returns {ok:false,error} for thorough without confirmed (does not throw)', async () => {
-    const fetchImpl = jsonFetch((_url, init) => {
-      const body = init?.body ? JSON.parse(init.body) as { verdict?: string } : {}
-      assert.notEqual(body.verdict, 'confirmed')
-      return { status: 400, body: { error: 'thorough mode requires verdict=confirmed' } }
-    })
-    const result = await createIssue(
-      {
-        title: 'maybe xss',
-        severity: 'high',
-        host: 'app.lab.internal',
-        evidence_paths: ['/workspace/p.png'],
-        reproduction: 'open /',
-        verdict: 'unverified',
-        task_id: 'thorough-task',
-      },
-      { fetch: fetchImpl, env: {} },
-    )
-    assert.equal(result.ok, false)
-    if (!result.ok) {
-      assert.match(result.error, /verdict=confirmed/)
-    }
-  })
-
-  it('returns {ok:true,id} when control accepts a confirmed finding', async () => {
-    const fetchImpl = jsonFetch(() => ({
-      status: 201,
-      body: { id: 'issue-1', status: 'confirmed', verdict: 'confirmed' },
-    }))
-    const result = await createIssue(
-      { title: 'xss', severity: 'high', verdict: 'confirmed', task_id: 't1' },
-      { fetch: fetchImpl, env: {} },
-    )
-    assert.deepEqual(result, { ok: true, id: 'issue-1' })
-  })
-
-  it('throws on infrastructure (5xx) failures', async () => {
-    const fetchImpl = jsonFetch(() => ({ status: 502, body: { error: 'bad gateway' } }))
-    await assert.rejects(
-      () => createIssue({ title: 'x', severity: 'low', verdict: 'confirmed' }, { fetch: fetchImpl, env: {} }),
-      /bad gateway/,
-    )
-  })
+import { test } from 'node:test'
+import { createIssue, queryIssues, updateIssue } from './client.ts'
+const id = 'ef2b412d-84ac-4cde-8330-bdfd04154c78',
+  env = { NEO_TASK_ID: id, NEO_TASK_TOKEN: 'fixture' },
+  agent = { options: { neoRunId: id, neoRunToken: 'run-fixture' } }
+const response = (status: number, body: any) => ({
+  status,
+  text: async () => JSON.stringify(body),
 })
-
-describe('issue_query / issue_update', () => {
-  it('issue_query returns the issues array and forwards filters', async () => {
-    let url = ''
-    const fetchImpl = jsonFetch((u) => {
-      url = u
-      return {
-        status: 200,
-        body: { issues: [{ id: 'i1', title: 'xss', severity: 'high', status: 'confirmed', host: 'app.lab.internal' }] },
-      }
-    })
-    const issues = await queryIssues(
-      { host: 'app.lab.internal', severity: 'high', status: 'confirmed' },
-      { fetch: fetchImpl, env: { CONTROL_URL: 'http://control:8090' } },
-    )
-    assert.equal(issues.length, 1)
-    assert.equal(issues[0]?.id, 'i1')
-    assert.match(url, /host=app.lab.internal/)
-    assert.match(url, /severity=high/)
-    assert.match(url, /status=confirmed/)
-  })
-
-  it('issue_update returns {ok:true} and sends status + comment', async () => {
-    let posted: unknown
-    const fetchImpl = jsonFetch((url, init) => {
-      assert.equal(url, 'http://control:8090/issues/issue-1')
-      assert.equal(init?.method, 'PATCH')
-      posted = init?.body ? JSON.parse(init.body) : null
-      return { status: 200, body: { id: 'issue-1', status: 'false_positive' } }
-    })
-    const result = await updateIssue(
-      { id: 'issue-1', status: 'false_positive', comment: 'nope' },
-      { fetch: fetchImpl, env: {} },
-    )
-    assert.deepEqual(result, { ok: true })
-    assert.deepEqual(posted, { status: 'false_positive', comment: 'nope' })
-  })
-
-  it('resolveTaskId prefers agent.options.neoTaskId over the child session id', () => {
-    const parentTask = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
-    assert.equal(
-      resolveTaskId(undefined, {}, {
-        id: 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78',
-        options: { neoTaskId: parentTask },
-      }),
-      parentTask,
-    )
-  })
-
-  it('omits non-uuid task_id and falls back to session UUID', async () => {
-    let url = ''
-    const fetchImpl = jsonFetch((u) => {
-      url = u
-      return { status: 200, body: { issues: [] } }
-    })
-    await queryIssues(
-      { task_id: 'session-ef2b412d-nope' },
-      {
-        fetch: fetchImpl,
-        env: {},
-        agent: { id: 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78' },
+test('candidate creation attributes run, binds task and honors URL', async () => {
+  const got = await createIssue(
+    { title: 'x', severity: 'high' },
+    {
+      env,
+      agent,
+      controlUrl: 'http://fixture',
+      fetch: async (url, init) => {
+        assert.equal(url, 'http://fixture/issues')
+        assert.equal(init?.headers?.['x-neo-run-token'], 'run-fixture')
+        assert.equal(JSON.parse(init!.body!).task_id, id)
+        return response(201, { id: 'issue' })
       },
-    )
-    assert.match(url, /task_id=ef2b412d-84ac-4cde-8330-bdfd04154c78/)
-    assert.doesNotMatch(url, /session-ef2b412d-nope/)
+    },
+  )
+  assert.deepEqual(got, { ok: true, id: 'issue' })
+})
+test('caller confirmed string cannot self verify', async () => {
+  await assert.rejects(
+    () =>
+      createIssue(
+        { title: 'x', severity: 'high', verdict: 'confirmed' },
+        { env, agent, fetch: async () => response(201, {}) },
+      ),
+    /independent verification/,
+  )
+})
+test('domain rejection and infrastructure errors preserved', async () => {
+  assert.deepEqual(
+    await createIssue(
+      { title: 'x', severity: 'high' },
+      { env, agent, fetch: async () => response(403, { error: 'denied' }) },
+    ),
+    { ok: false, error: 'denied' },
+  )
+  await assert.rejects(
+    () =>
+      createIssue(
+        { title: 'x', severity: 'high' },
+        { env, agent, fetch: async () => response(502, { error: 'outage' }) },
+      ),
+    /outage/,
+  )
+})
+test('query forwards mandatory task filters and rejects malformed success', async () => {
+  const result = await queryIssues(
+    { host: 'fixture', status: 'open' },
+    {
+      env,
+      fetch: async (url) => {
+        assert.ok(url.includes('task_id=' + id))
+        assert.ok(url.includes('host=fixture'))
+        return response(200, { issues: [] })
+      },
+    },
+  )
+  assert.deepEqual(result, [])
+  await assert.rejects(
+    () => queryIssues({}, { env, fetch: async () => response(200, {}) }),
+    /invalid issue list/,
+  )
+})
+test('update includes comment verification evidence and CAS revision', async () => {
+  let body: any
+  await updateIssue(
+    {
+      id: 'issue',
+      revision: 3,
+      status: 'confirmed',
+      verification_id: id,
+      comment: 'verified',
+      evidence_paths: ['a'],
+    },
+    {
+      env,
+      agent,
+      fetch: async (_, init) => {
+        body = JSON.parse(init!.body!)
+        return response(200, { id: 'issue', revision: 4 })
+      },
+    },
+  )
+  assert.deepEqual(body, {
+    revision: 3,
+    status: 'confirmed',
+    verification_id: id,
+    comment: 'verified',
+    evidence_paths: ['a'],
   })
+  await assert.rejects(
+    () =>
+      updateIssue(
+        { id: 'issue', revision: 3 },
+        { env, agent, fetch: async () => response(409, { error: 'stale' }) },
+      ),
+    /stale/,
+  )
 })

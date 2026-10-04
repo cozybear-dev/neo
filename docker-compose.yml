@@ -6,8 +6,6 @@ services:
     build:
       context: .
       dockerfile: docker/dsh/Dockerfile
-    env_file:
-      - .env
     environment:
       DSH_HOME: /home/node/.dsh
       DSH_WEB_SEARCH_PROVIDER: exa
@@ -32,6 +30,9 @@ services:
       NEO_LLM_WORKHORSE_API: ${NEO_LLM_WORKHORSE_API:-}
       NEO_LLM_WORKHORSE_API_KEY_ENV: ${NEO_LLM_WORKHORSE_API_KEY_ENV:-}
       NEO_LLM_WORKHORSE_REASONING_EFFORT: ${NEO_LLM_WORKHORSE_REASONING_EFFORT:-}
+      NEO_LLM_OAUTH_CHATGPT_FILE: ${NEO_LLM_OAUTH_CHATGPT_FILE:-}
+      NEO_LLM_OAUTH_CLAUDE_FILE: ${NEO_LLM_OAUTH_CLAUDE_FILE:-}
+      NEO_LLM_OAUTH_GROK_FILE: ${NEO_LLM_OAUTH_GROK_FILE:-}
       EXA_API_KEY: ${EXA_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       PDCP_API_KEY: ${PDCP_API_KEY:-}
@@ -39,54 +40,77 @@ services:
       CONTROL_URL: ${CONTROL_URL:-http://control:8090}
       NEO_TASK_ID: ${NEO_TASK_ID:-}
       INTERACTSH_URL: ${INTERACTSH_URL:-http://interactsh:80}
-      INTERACTSH_TOKEN: ${INTERACTSH_TOKEN:-neo-oast}
+      INTERACTSH_TOKEN: ${INTERACTSH_TOKEN:?set independent OAST token}
+      INTERACTSH_CALLBACK_DOMAIN: ${INTERACTSH_CALLBACK_DOMAIN:-oast.neo.internal}
+      INTERACTSH_CALLBACK_BASE_URL: http://broker:8091/oast/callback
+      INTERACTSH_CALLBACK_SCHEME: http
+      INTERACTSH_CALLBACK_PORT: "80"
+      INTERACTSH_DNS_ENABLED: "false"
       SANDBOX_CONTAINER: ${SANDBOX_CONTAINER:-neo-sandbox-1}
       BROWSER_CDP_URL: ${BROWSER_CDP_URL:-http://browser:9222}
-      DOCKER_HOST: ${DOCKER_HOST:-unix:///var/run/docker.sock}
+      NEO_BROKER_URL: http://broker:8091
+      NEO_TASK_TOKEN: ${NEO_TASK_TOKEN:-}
+      NEO_EXEC_NETWORK: ${NEO_EXEC_NETWORK:-none}
       # Isolation is the sandbox container. DSH same-world workspace-write
       # fail-closes here (no bwrap/Landlock/ACL runner in this image).
       DSH_PERMISSION_MODE: ${DSH_PERMISSION_MODE:-danger-full-access}
     volumes:
       - dsh-home:/home/node/.dsh
       - workspace:/workspace
-      # docker exec into sandbox only; target-container create stays on sandbox.
-      - /var/run/docker.sock:/var/run/docker.sock
-    group_add:
-      - "${DOCKER_GID:-0}"
+      # Optional subscription CLI credentials (read-only). Uncomment the matching
+      # mount after the host directory exists — Compose creates a missing bind
+      # source as an empty directory.
+      # - ${HOME}/.codex:/host-auth/codex:ro
+      # - ${HOME}/.claude:/host-auth/claude:ro
+      # - ${HOME}/.grok:/host-auth/grok:ro
+
     ports:
-      - "3080:3080"
+      - "127.0.0.1:3080:3080"
     networks:
       - control
+      - browser-link
     depends_on:
-      postgres:
-        condition: service_healthy
-      sandbox:
-        condition: service_started
       control:
+        condition: service_healthy
+      broker:
         condition: service_healthy
       browser:
         condition: service_healthy
 
   sandbox:
+    image: neo-sandbox:local
     build:
       context: ./docker/sandbox
-    container_name: neo-sandbox-1
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  broker:
+    build:
+      context: .
+      dockerfile: docker/broker/Dockerfile
+    environment:
+      CONTROL_URL: http://control:8090
+      NEO_CONTROL_BROKER_TOKEN: ${NEO_CONTROL_BROKER_TOKEN:?set independent broker credential}
+      NEO_WORKER_IMAGE: neo-sandbox:local
+      INTERACTSH_CALLBACK_DOMAIN: ${INTERACTSH_CALLBACK_DOMAIN:-oast.neo.internal}
     volumes:
-      - workspace:/workspace
-      # Sandbox is the only service allowed to talk to the Docker socket,
-      # and only to create containers on the isolated `targets` network.
       - /var/run/docker.sock:/var/run/docker.sock
-    networks:
-      - control
-      - targets
-    # Required so docker.sock group permissions work from the neo user later.
-    group_add:
-      - "${DOCKER_GID:-0}"
+      - broker-state:/state
+    networks: [control, targets]
+    depends_on:
+      sandbox:
+        condition: service_started
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://localhost:8091/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   browser:
     build:
       context: ./docker/browser
-    # 9222 intentionally not published to the host; CDP is control-network only.
+    # CDP is internal browser-link only and is never published to the host.
     expose:
       - "9222"
     # Playwright image may lack curl; probe CDP with node fetch instead.
@@ -97,19 +121,19 @@ services:
       retries: 20
       start_period: 10s
     networks:
-      - control
+      - browser-link
 
   interactsh:
-    image: projectdiscovery/interactsh-server:latest
+    image: projectdiscovery/interactsh-server@sha256:246d8988fed0cfefb28f904c4e1ec4a6bb4b6931288d10794a31577687f02471
     # 1.3+ fatals without -domain ("No domains specified"). A dummy suffix is
     # enough for in-network HTTP OAST; a real DNS domain is only needed for
     # internet-facing OOB.
     command:
       - -domain
-      - ${INTERACTSH_DOMAIN:-oast.neo.internal}
+      - ${INTERACTSH_CALLBACK_DOMAIN:-oast.neo.internal}
       - -auth
       - -token
-      - ${INTERACTSH_TOKEN:-neo-oast}
+      - ${INTERACTSH_TOKEN:?set independent OAST token}
       - -skip-acme
       - -disable-update-check
       - -listen-ip
@@ -120,13 +144,11 @@ services:
       - targets
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     environment:
       POSTGRES_USER: neo
-      POSTGRES_PASSWORD: neo
+      POSTGRES_PASSWORD: ${NEO_DB_PASSWORD:?set database password}
       POSTGRES_DB: neo
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
@@ -142,11 +164,13 @@ services:
       context: .
       dockerfile: docker/control/Dockerfile
     environment:
-      DATABASE_URL: postgres://neo:neo@postgres:5432/neo
+      DATABASE_URL: postgres://neo:${NEO_DB_PASSWORD:?set database password}@postgres:5432/neo
+      NEO_CONTROL_ADMIN_TOKEN: ${NEO_CONTROL_ADMIN_TOKEN:?set operator credential}
+      NEO_CONTROL_BROKER_TOKEN: ${NEO_CONTROL_BROKER_TOKEN:?set broker credential}
       NEO_ALLOWLIST: ${NEO_ALLOWLIST:-localhost,127.0.0.1,*.lab.internal,juice-shop}
       PORT: "8090"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:8090/readyz"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -158,8 +182,11 @@ services:
         condition: service_healthy
 
   juice-shop:
-    image: bkimminich/juice-shop
+    image: bkimminich/juice-shop@sha256:73c53fbf442e8337b3ea3d98c7e8550308854701ebdfce4cc39768f36b75430e
     profiles: [lab]
+    labels:
+      neo.task: ${NEO_TASK_ID:-unassigned}
+      neo.lab: "1"
     networks:
       - targets
 
@@ -167,8 +194,12 @@ volumes:
   workspace:
   pgdata:
   dsh-home:
+  broker-state:
+    name: neo_broker_state
 
 networks:
+  browser-link:
+    internal: true
   control:
     driver: bridge
   targets:

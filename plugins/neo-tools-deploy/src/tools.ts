@@ -1,4 +1,9 @@
-import { deployDown, deployUp, renderSafe, type ClientOptions } from './client.ts'
+import {
+  deployDown,
+  deployUp,
+  renderSafe,
+  type ClientOptions,
+} from './client.ts'
 
 export type ToolDef = {
   name: string
@@ -6,7 +11,10 @@ export type ToolDef = {
   parameters: Record<string, unknown>
   output: {
     schema: unknown
-    render: (args: unknown, value: unknown) => Array<{ type: 'text'; text: string }>
+    render: (
+      args: unknown,
+      value: unknown,
+    ) => Array<{ type: 'text'; text: string }>
   }
   execute: (
     args: Record<string, unknown>,
@@ -28,20 +36,33 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
           type: 'string',
           required: true,
           enum: ['git', 'image', 'compose'],
-          description: 'git clone + compose, single image run, or compose file path.',
+          description:
+            'git clone + compose, single image run, or compose file path.',
         },
         ref: {
           type: 'string',
           required: true,
-          description: 'Git URL, image reference, or path to a compose YAML file.',
+          description:
+            'Git URL, image reference, or path to a compose YAML file.',
+        },
+        port: {
+          type: 'number',
+          required: true,
+          description: 'HTTP service internal port for readiness and endpoint.',
+        },
+        service: {
+          type: 'string',
+          description: 'Compose endpoint service name.',
         },
         network: {
           type: 'string',
-          description: 'Docker/compose network (default targets). Hard-fails unless targets.',
+          description:
+            'Docker/compose network (default targets). Hard-fails unless targets.',
         },
         id: {
           type: 'string',
-          description: 'Optional deploy id (default random hex). Project = neo-target-<id>.',
+          description:
+            'Optional deploy id (default random hex). Project = neo-target-<id>.',
         },
       },
       output: {
@@ -51,6 +72,16 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
           properties: {
             id: { type: 'string', required: true },
             project: { type: 'string', required: true },
+            port: {
+              type: 'number',
+              required: true,
+              description:
+                'HTTP service internal port for readiness and endpoint.',
+            },
+            service: {
+              type: 'string',
+              description: 'Compose endpoint service name.',
+            },
             network: { type: 'string', required: true },
             baseUrl: { type: 'string', required: true },
             logPath: { type: 'string', required: true },
@@ -63,7 +94,11 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
           {
             source: args.source as 'git' | 'image' | 'compose',
             ref: String(args.ref ?? ''),
-            network: typeof args.network === 'string' ? args.network : undefined,
+            port: Number(args.port),
+            service:
+              typeof args.service === 'string' ? args.service : undefined,
+            network:
+              typeof args.network === 'string' ? args.network : undefined,
             id: typeof args.id === 'string' ? args.id : undefined,
           },
           { ...options, signal: exec.signal },
@@ -75,7 +110,11 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
       description:
         'Tear down a lab stack started by deploy_up (docker compose -p neo-target-<id> down).',
       parameters: {
-        id: { type: 'string', required: true, description: 'Deploy id returned by deploy_up.' },
+        id: {
+          type: 'string',
+          required: true,
+          description: 'Deploy id returned by deploy_up.',
+        },
       },
       output: {
         schema: {

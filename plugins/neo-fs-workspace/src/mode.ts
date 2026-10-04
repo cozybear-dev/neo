@@ -35,11 +35,11 @@ export function isUnderWorkspace(root: string, realPath: string): boolean {
 }
 
 /**
- * Add group and other read. Other permission bits stay as they are, so 0755
- * stays executable and 0600 becomes 0644.
+ * Keep owner/group access, add group read, and remove all world permissions.
+ * Executable files stay executable for their owner/group.
  */
 export function withGroupOtherRead(mode: number): number {
-  return (mode & 0o777) | 0o044
+  return (mode & 0o770) | 0o040
 }
 
 /**
@@ -58,7 +58,7 @@ export function relaxObservedFile(
     const info = deps.stat(realPath)
     if (!info.isFile()) return
     const perm = info.mode & 0o777
-    if ((perm & 0o044) === 0o044) return
+    if ((perm & 0o047) === 0o040) return
     deps.chmod(realPath, withGroupOtherRead(perm))
   } catch {
     // A throwing listener fails the tool call after the mutation succeeded.

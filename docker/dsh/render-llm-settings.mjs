@@ -15,7 +15,9 @@
  * model selection is a Cordis patch. llm-pi-ai stays dormant until a
  * providers dict is supplied. Catalog routes (openai, anthropic, openrouter)
  * need only apiKeyEnv; omitting api, baseURL, and models keeps the installed
- * catalog. A custom route must set api, baseURL, and a non-empty models list.
+ * catalog. Subscription aliases (chatgpt, claude, grok) register the matching
+ * catalog route as `{}` so stored OAuth is used instead of a key. A custom
+ * route must set api, baseURL, and a non-empty models list.
  * Native DeepSeek is the llm-deepseek route `deepseek-official`, not a pi-ai
  * provider — emitting it on llm-pi-ai is DUPLICATE_ADAPTER.
  *
@@ -29,11 +31,31 @@ const PATCH_FILENAME = 'neo-llm.patch.yml'
 
 /** NEO_LLM_PROVIDER → DSH route + credential env (catalog ids verbatim). */
 const PROVIDERS = {
-  deepseek: { kind: 'native', route: NATIVE_DEEPSEEK_ROUTE, keyEnv: 'DEEPSEEK_API_KEY' },
+  deepseek: {
+    kind: 'native',
+    route: NATIVE_DEEPSEEK_ROUTE,
+    keyEnv: 'DEEPSEEK_API_KEY',
+  },
   openai: { kind: 'catalog', route: 'openai', keyEnv: 'OPENAI_API_KEY' },
-  anthropic: { kind: 'catalog', route: 'anthropic', keyEnv: 'ANTHROPIC_API_KEY' },
-  openrouter: { kind: 'catalog', route: 'openrouter', keyEnv: 'OPENROUTER_API_KEY' },
+  anthropic: {
+    kind: 'catalog',
+    route: 'anthropic',
+    keyEnv: 'ANTHROPIC_API_KEY',
+  },
+  openrouter: {
+    kind: 'catalog',
+    route: 'openrouter',
+    keyEnv: 'OPENROUTER_API_KEY',
+  },
   custom: { kind: 'custom', route: 'custom', keyEnv: 'NEO_LLM_API_KEY' },
+  chatgpt: { kind: 'oauth', route: 'openai-codex', defaultModel: 'gpt-5.5' },
+  claude: { kind: 'oauth', route: 'anthropic', defaultModel: 'claude-sonnet-4-5' },
+  grok: { kind: 'oauth', route: 'xai', defaultModel: 'grok-4.7' },
+}
+
+function expectedProviders() {
+  const names = Object.keys(PROVIDERS)
+  return `${names.slice(0, -1).join(', ')}, or ${names[names.length - 1]}`
 }
 
 const API_KEY_ENV_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -62,19 +84,33 @@ export function resolveLlmSelection(env) {
   const spec = PROVIDERS[providerInput]
   if (spec === undefined) {
     throw new LlmSettingsError(
-      `NEO_LLM_PROVIDER=${JSON.stringify(providerInput)} is not supported `
-        + `(expected deepseek, openai, anthropic, openrouter, or custom)`,
+      `NEO_LLM_PROVIDER=${JSON.stringify(providerInput)} is not supported ` +
+        `(expected ${expectedProviders()})`,
     )
   }
 
-  const model = trim(env.NEO_LLM_MODEL)
+  const model =
+    trim(env.NEO_LLM_MODEL) || (spec.kind === 'oauth' ? spec.defaultModel : '')
   if (model === '') {
     throw new LlmSettingsError('NEO_LLM_MODEL is required')
   }
 
-  const keyEnvName = spec.kind === 'custom'
-    ? (trim(env.NEO_LLM_API_KEY_ENV) || 'NEO_LLM_API_KEY')
-    : spec.keyEnv
+  if (spec.kind === 'oauth') {
+    return {
+      providerInput,
+      kind: spec.kind,
+      route: spec.route,
+      model,
+      keyEnvName: '',
+      apiKey: '',
+      reasoningEffort: trim(env.NEO_LLM_REASONING_EFFORT) || undefined,
+    }
+  }
+
+  const keyEnvName =
+    spec.kind === 'custom'
+      ? trim(env.NEO_LLM_API_KEY_ENV) || 'NEO_LLM_API_KEY'
+      : spec.keyEnv
   if (!API_KEY_ENV_PATTERN.test(keyEnvName)) {
     throw new LlmSettingsError(
       `credential env name ${JSON.stringify(keyEnvName)} must match ${String(API_KEY_ENV_PATTERN)}`,
@@ -94,7 +130,9 @@ export function resolveLlmSelection(env) {
   if (spec.kind === 'custom') {
     const baseURL = trim(env.NEO_LLM_BASE_URL)
     if (baseURL === '') {
-      throw new LlmSettingsError('NEO_LLM_PROVIDER=custom requires NEO_LLM_BASE_URL')
+      throw new LlmSettingsError(
+        'NEO_LLM_PROVIDER=custom requires NEO_LLM_BASE_URL',
+      )
     }
     const api = trim(env.NEO_LLM_API) || 'openai-completions'
     return {
@@ -147,9 +185,10 @@ function renderAgentDefaultModel(selection) {
 }
 
 function renderCustomProviderBlock(selection) {
-  const models = Array.isArray(selection.models) && selection.models.length > 0
-    ? selection.models
-    : [selection.model]
+  const models =
+    Array.isArray(selection.models) && selection.models.length > 0
+      ? selection.models
+      : [selection.model]
   return [
     `    ${selection.route}:`,
     `      apiKeyEnv: ${yamlScalar(selection.keyEnvName)}`,
@@ -165,6 +204,10 @@ function renderCatalogProviderBlock(selection) {
     `    ${selection.route}:`,
     `      apiKeyEnv: ${yamlScalar(selection.keyEnvName)}`,
   ].join('\n')
+}
+
+function renderOAuthProviderBlock(selection) {
+  return `    ${selection.route}: {}`
 }
 
 function splitTopLevel(yaml) {
@@ -238,7 +281,9 @@ function upsertProviderSection(yaml, route, providerLines, replaceBlock) {
     return joinSections(sections)
   }
   const head = lines.slice(0, providersIdx + 1)
-  const { blocks, afterProviders } = splitProviderBlocks(lines.slice(providersIdx + 1))
+  const { blocks, afterProviders } = splitProviderBlocks(
+    lines.slice(providersIdx + 1),
+  )
   const kept = []
   let replaced = false
   for (const block of blocks) {
@@ -263,25 +308,51 @@ function upsertProviderSection(yaml, route, providerLines, replaceBlock) {
 
 function upsertCustomProvider(yaml, selection) {
   const providerLines = renderCustomProviderBlock(selection).split('\n')
-  return upsertProviderSection(yaml, selection.route, providerLines, () => providerLines)
+  return upsertProviderSection(
+    yaml,
+    selection.route,
+    providerLines,
+    () => providerLines,
+  )
 }
 
 function upsertCatalogProvider(yaml, selection) {
   const apiLine = `      apiKeyEnv: ${yamlScalar(selection.keyEnvName)}`
   const providerLines = renderCatalogProviderBlock(selection).split('\n')
-  return upsertProviderSection(yaml, selection.route, providerLines, (lines) => {
-    const kept = lines.filter((line, index) => index === 0 || !/^\s+apiKeyEnv\s*:/.test(line))
-    kept.splice(1, 0, apiLine)
-    return kept
-  })
+  return upsertProviderSection(
+    yaml,
+    selection.route,
+    providerLines,
+    (lines) => {
+      const kept = lines.filter(
+        (line, index) => index === 0 || !/^\s+apiKeyEnv\s*:/.test(line),
+      )
+      kept.splice(1, 0, apiLine)
+      return kept
+    },
+  )
+}
+
+function upsertOAuthProvider(yaml, selection) {
+  const providerLines = renderOAuthProviderBlock(selection).split('\n')
+  return upsertProviderSection(
+    yaml,
+    selection.route,
+    providerLines,
+    () => providerLines,
+  )
 }
 
 function isPatchDocument(yaml) {
-  return String(yaml).split('\n').some((line) => /^- id:/.test(line))
+  return String(yaml)
+    .split('\n')
+    .some((line) => /^- id:/.test(line))
 }
 
 function patchConfigToSection(key, itemLines) {
-  const configIdx = itemLines.findIndex((line) => /^  config\s*:\s*$/.test(line))
+  const configIdx = itemLines.findIndex((line) =>
+    /^  config\s*:\s*$/.test(line),
+  )
   if (configIdx === -1) return `${key}:`
   const body = []
   for (const line of itemLines.slice(configIdx + 1)) {
@@ -306,7 +377,9 @@ function parseExisting(yaml) {
   const text = String(yaml ?? '').replace(/\r\n/g, '\n')
   if (trim(text) === '') return { llm: '', rawItems: [] }
   if (!isPatchDocument(text)) {
-    const llm = splitTopLevel(text).find((section) => section.key === 'llm-pi-ai')
+    const llm = splitTopLevel(text).find(
+      (section) => section.key === 'llm-pi-ai',
+    )
     return { llm: llm ? llm.lines.join('\n') : '', rawItems: [] }
   }
   const items = []
@@ -345,12 +418,17 @@ function sectionTextToPatch(key, text) {
     return all.slice(index + 1).some((later) => later.trim() !== '')
   })
   if (body.length === 0) return `- id: ${key}`
-  return [`- id: ${key}`, '  config:', ...body.map((line) => (line.trim() === '' ? '' : `  ${line}`))].join('\n')
+  return [
+    `- id: ${key}`,
+    '  config:',
+    ...body.map((line) => (line.trim() === '' ? '' : `  ${line}`)),
+  ].join('\n')
 }
 
 function emitPatch(modelText, llmText, rawItems) {
   const chunks = [sectionTextToPatch('agent-default-model', modelText)]
-  if (trim(llmText) !== '') chunks.push(sectionTextToPatch('llm-pi-ai', llmText))
+  if (trim(llmText) !== '')
+    chunks.push(sectionTextToPatch('llm-pi-ai', llmText))
   for (const raw of rawItems) {
     const text = raw.join('\n').replace(/\n+$/, '').trimEnd()
     if (text !== '') chunks.push(text)
@@ -363,7 +441,15 @@ const ROLE_PREFIX = {
   WORKHORSE: 'NEO_LLM_WORKHORSE',
 }
 
-const ROLE_FIELDS = ['PROVIDER', 'MODEL', 'API_KEY', 'BASE_URL', 'API', 'API_KEY_ENV', 'REASONING_EFFORT']
+const ROLE_FIELDS = [
+  'PROVIDER',
+  'MODEL',
+  'API_KEY',
+  'BASE_URL',
+  'API',
+  'API_KEY_ENV',
+  'REASONING_EFFORT',
+]
 
 function roleValue(env, prefix, field) {
   return trim(env[`${prefix}_${field}`])
@@ -374,38 +460,36 @@ function activeSelections(profile) {
 }
 
 /**
- * A role is active only when its MODEL is set. Any other role field without
- * MODEL is a partial config and fails startup.
- * @param {NodeJS.ProcessEnv} env
- * @param {string} prefix
- */
-function roleModel(env, prefix) {
-  const model = roleValue(env, prefix, 'MODEL')
-  const partial = ROLE_FIELDS.some((field) => field !== 'MODEL' && roleValue(env, prefix, field) !== '')
-  if (model === '' && partial) {
-    throw new LlmSettingsError(`${prefix}_MODEL is required when other ${prefix}_* settings are set`)
-  }
-  return model
-}
-
-/**
+ * A role is active only when its MODEL is set, except oauth aliases default
+ * MODEL when another role field is present.
  * @param {NodeJS.ProcessEnv} env
  * @param {'ORCHESTRATOR' | 'WORKHORSE'} roleKey
  * @param {ReturnType<typeof resolveLlmSelection>} base
  */
 function resolveRole(env, roleKey, base) {
   const prefix = ROLE_PREFIX[roleKey]
-  const model = roleModel(env, prefix)
-  if (model === '') return undefined
-
   const providerInput = roleValue(env, prefix, 'PROVIDER') || base.providerInput
   const spec = PROVIDERS[providerInput]
   if (spec === undefined) {
     throw new LlmSettingsError(
-      `${prefix}_PROVIDER=${JSON.stringify(providerInput)} is not supported `
-        + '(expected deepseek, openai, anthropic, openrouter, or custom)',
+      `${prefix}_PROVIDER=${JSON.stringify(providerInput)} is not supported ` +
+        `(expected ${expectedProviders()})`,
     )
   }
+
+  let model = roleValue(env, prefix, 'MODEL')
+  const partial = ROLE_FIELDS.some(
+    (field) => field !== 'MODEL' && roleValue(env, prefix, field) !== '',
+  )
+  if (model === '' && spec.kind === 'oauth' && partial) {
+    model = spec.defaultModel
+  }
+  if (model === '' && partial) {
+    throw new LlmSettingsError(
+      `${prefix}_MODEL is required when other ${prefix}_* settings are set`,
+    )
+  }
+  if (model === '') return undefined
 
   const sameProvider = providerInput === base.providerInput
   const explicitKey = roleValue(env, prefix, 'API_KEY')
@@ -415,32 +499,43 @@ function resolveRole(env, roleKey, base) {
   let apiKey = explicitKey
   if (apiKey === '') {
     if (sameProvider) apiKey = base.apiKey
-    else if (spec.kind !== 'custom') apiKey = trim(env[spec.keyEnv])
+    else if (spec.kind !== 'custom' && spec.kind !== 'oauth')
+      apiKey = trim(env[spec.keyEnv])
   }
-  if (spec.kind !== 'custom' && apiKey === '') {
+  if (spec.kind !== 'custom' && spec.kind !== 'oauth' && apiKey === '') {
     throw new LlmSettingsError(
       `cloud provider ${providerInput} needs ${spec.keyEnv} or ${prefix}_API_KEY`,
     )
   }
 
-  const reasoningEffort = roleValue(env, prefix, 'REASONING_EFFORT') || undefined
+  const reasoningEffort =
+    roleValue(env, prefix, 'REASONING_EFFORT') || undefined
   const role = roleKey.toLowerCase()
 
   if (spec.kind === 'custom') {
     let keyEnvName
     if (explicitKeyEnv !== '') keyEnvName = explicitKeyEnv
-    else if (sameProvider && (explicitKey === '' || explicitKey === base.apiKey)) keyEnvName = base.keyEnvName
+    else if (
+      sameProvider &&
+      (explicitKey === '' || explicitKey === base.apiKey)
+    )
+      keyEnvName = base.keyEnvName
     else keyEnvName = `${prefix}_API_KEY`
     if (!API_KEY_ENV_PATTERN.test(keyEnvName)) {
       throw new LlmSettingsError(
         `credential env name ${JSON.stringify(keyEnvName)} must match ${String(API_KEY_ENV_PATTERN)}`,
       )
     }
-    const baseURL = explicitBaseURL || (sameProvider ? (base.baseURL || '') : '')
+    const baseURL = explicitBaseURL || (sameProvider ? base.baseURL || '' : '')
     if (baseURL === '') {
-      throw new LlmSettingsError(`${prefix}_PROVIDER=custom requires ${prefix}_BASE_URL`)
+      throw new LlmSettingsError(
+        `${prefix}_PROVIDER=custom requires ${prefix}_BASE_URL`,
+      )
     }
-    const api = explicitApi || (sameProvider && base.api ? base.api : '') || 'openai-completions'
+    const api =
+      explicitApi ||
+      (sameProvider && base.api ? base.api : '') ||
+      'openai-completions'
     return {
       providerInput,
       kind: spec.kind,
@@ -450,6 +545,19 @@ function resolveRole(env, roleKey, base) {
       apiKey,
       baseURL,
       api,
+      reasoningEffort,
+      role,
+    }
+  }
+
+  if (spec.kind === 'oauth') {
+    return {
+      providerInput,
+      kind: spec.kind,
+      route: spec.route,
+      model,
+      keyEnvName: '',
+      apiKey: '',
       reasoningEffort,
       role,
     }
@@ -485,7 +593,10 @@ function assignRoutes(profile) {
         baseURL: sel.baseURL,
       }
       customGroups.set(groupKey, group)
-    } else if (group.keyEnvName !== sel.keyEnvName || group.apiKey !== sel.apiKey) {
+    } else if (
+      group.keyEnvName !== sel.keyEnvName ||
+      group.apiKey !== sel.apiKey
+    ) {
       throw new LlmSettingsError(
         `custom route ${group.route} would be configured with two different keys`,
       )
@@ -504,7 +615,14 @@ function assignRoutes(profile) {
       byRoute.set(sel.route, sel)
       continue
     }
-    if (prev.keyEnvName !== sel.keyEnvName || prev.apiKey !== sel.apiKey) {
+    if (prev.kind !== sel.kind || prev.keyEnvName !== sel.keyEnvName || prev.apiKey !== sel.apiKey) {
+      if ((prev.kind === 'oauth') !== (sel.kind === 'oauth')) {
+        const oauthSel = prev.kind === 'oauth' ? prev : sel
+        const keySel = prev.kind === 'oauth' ? sel : prev
+        throw new LlmSettingsError(
+          `${oauthSel.providerInput} subscription and ${keySel.providerInput} API key cannot share the ${sel.route} route`,
+        )
+      }
       throw new LlmSettingsError(
         `route ${sel.route} would be configured with two different keys`,
       )
@@ -526,9 +644,9 @@ function assertDistinctCredentials(profile) {
     mapped[sel.keyEnvName] = sel.apiKey
   }
   if (
-    profile.base.apiKey !== ''
-    && mapped.NEO_LLM_API_KEY !== undefined
-    && mapped.NEO_LLM_API_KEY !== profile.base.apiKey
+    profile.base.apiKey !== '' &&
+    mapped.NEO_LLM_API_KEY !== undefined &&
+    mapped.NEO_LLM_API_KEY !== profile.base.apiKey
   ) {
     throw new LlmSettingsError(
       'credential env NEO_LLM_API_KEY would be set to two different keys',
@@ -557,7 +675,8 @@ function parentForPatch(profile) {
   if (!profile.orchestrator) return profile.base
   return {
     ...profile.orchestrator,
-    reasoningEffort: profile.orchestrator.reasoningEffort || profile.base.reasoningEffort,
+    reasoningEffort:
+      profile.orchestrator.reasoningEffort || profile.base.reasoningEffort,
   }
 }
 
@@ -572,6 +691,7 @@ export function renderProfileSettings(existing, profile) {
   let llm = parsed.llm
   const seenCatalog = new Set()
   const seenCustom = new Set()
+  const seenOAuth = new Set()
   for (const sel of activeSelections(profile)) {
     if (sel.kind === 'catalog' && !seenCatalog.has(sel.route)) {
       seenCatalog.add(sel.route)
@@ -581,8 +701,16 @@ export function renderProfileSettings(existing, profile) {
       seenCustom.add(sel.route)
       llm = upsertCustomProvider(llm, sel)
     }
+    if (sel.kind === 'oauth' && !seenOAuth.has(sel.route)) {
+      seenOAuth.add(sel.route)
+      llm = upsertOAuthProvider(llm, sel)
+    }
   }
-  return emitPatch(renderAgentDefaultModel(parentForPatch(profile)), llm, parsed.rawItems)
+  return emitPatch(
+    renderAgentDefaultModel(parentForPatch(profile)),
+    llm,
+    parsed.rawItems,
+  )
 }
 
 /**
@@ -594,7 +722,10 @@ export function mappedProfileEnv(profile) {
   const mapped = mappedCredentialEnv(profile.base)
   for (const sel of [profile.orchestrator, profile.workhorse]) {
     if (!sel || sel.apiKey === '') continue
-    if (mapped[sel.keyEnvName] !== undefined && mapped[sel.keyEnvName] !== sel.apiKey) {
+    if (
+      mapped[sel.keyEnvName] !== undefined &&
+      mapped[sel.keyEnvName] !== sel.apiKey
+    ) {
       throw new LlmSettingsError(
         `credential env ${sel.keyEnvName} would be set to two different keys`,
       )
@@ -605,7 +736,8 @@ export function mappedProfileEnv(profile) {
     mapped.NEO_RESOLVED_WORKHORSE_PROVIDER = profile.workhorse.route
     mapped.NEO_RESOLVED_WORKHORSE_MODEL = profile.workhorse.model
     if (profile.workhorse.reasoningEffort) {
-      mapped.NEO_RESOLVED_WORKHORSE_REASONING_EFFORT = profile.workhorse.reasoningEffort
+      mapped.NEO_RESOLVED_WORKHORSE_REASONING_EFFORT =
+        profile.workhorse.reasoningEffort
     }
   }
   return mapped
@@ -632,7 +764,10 @@ export function mergeSettingsYaml(existing, selection) {
   const parsed = parseExisting(existing)
   let llm = parsed.llm
   if (selection.kind === 'custom') llm = upsertCustomProvider(llm, selection)
-  else if (selection.kind === 'catalog') llm = upsertCatalogProvider(llm, selection)
+  else if (selection.kind === 'catalog')
+    llm = upsertCatalogProvider(llm, selection)
+  else if (selection.kind === 'oauth')
+    llm = upsertOAuthProvider(llm, selection)
   return emitPatch(renderAgentDefaultModel(selection), llm, parsed.rawItems)
 }
 
@@ -649,7 +784,12 @@ function printExports(mapped) {
 }
 
 function parseArgs(argv) {
-  const flags = { print: false, exportEnv: false, dshHome: undefined, write: undefined }
+  const flags = {
+    print: false,
+    exportEnv: false,
+    dshHome: undefined,
+    write: undefined,
+  }
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (arg === '--print') flags.print = true
@@ -685,7 +825,8 @@ async function main(argv, env, io) {
   const profile = resolveLlmProfile(env)
   const mapped = mappedProfileEnv(profile)
   const dshHome = flags.dshHome || trim(env.DSH_HOME)
-  const writePath = flags.write || (dshHome !== '' ? patchPath(dshHome) : undefined)
+  const writePath =
+    flags.write || (dshHome !== '' ? patchPath(dshHome) : undefined)
 
   if (flags.print && writePath === undefined) {
     io.stdout.write(renderProfileSettings('', profile))
@@ -694,11 +835,15 @@ async function main(argv, env, io) {
   }
 
   if (writePath === undefined && !flags.print) {
-    throw new LlmSettingsError('set DSH_HOME or pass --dsh-home / --write / --print')
+    throw new LlmSettingsError(
+      'set DSH_HOME or pass --dsh-home / --write / --print',
+    )
   }
 
   if (writePath !== undefined) {
-    const { mkdir, readFile, writeFile } = await import('node:fs/promises')
+    const { mkdir, readFile, writeFile, chmod } = await import(
+      'node:fs/promises'
+    )
     const { dirname } = await import('node:path')
     await mkdir(dirname(writePath), { recursive: true })
     let existing = ''
@@ -709,6 +854,7 @@ async function main(argv, env, io) {
     }
     const merged = renderProfileSettings(existing, profile)
     await writeFile(writePath, merged, { encoding: 'utf8', mode: 0o600 })
+    await chmod(writePath, 0o600)
     if (flags.print) io.stdout.write(merged)
   }
 
@@ -717,7 +863,10 @@ async function main(argv, env, io) {
 }
 
 const { pathToFileURL } = await import('node:url')
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   try {
     const code = await main(process.argv.slice(2), process.env, {
       stdout: process.stdout,
@@ -725,7 +874,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     })
     process.exitCode = code
   } catch (error) {
-    const message = error instanceof LlmSettingsError ? error.message : String(error?.stack ?? error)
+    const message =
+      error instanceof LlmSettingsError
+        ? error.message
+        : String(error?.stack ?? error)
     process.stderr.write(`neo-llm: ${message}\n`)
     process.exitCode = 1
   }

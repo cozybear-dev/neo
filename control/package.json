@@ -12,14 +12,12 @@
     "node": ">=22"
   },
   "dependencies": {
-    "fastify": "^5.4.0",
-    "pg": "^8.16.3",
-    "picomatch": "^4.0.2"
+    "fastify": "5.12.5",
+    "pg": "8.16.3"
   },
   "devDependencies": {
     "@types/node": "^22.17.0",
     "@types/pg": "^8.15.5",
-    "@types/picomatch": "^4.0.0",
     "tsx": "^4.20.3",
     "typescript": "^5.9.2"
   }

@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -52,11 +59,22 @@ describe('preset yaml', () => {
   it('judge has no bash, browser, or oast tools', () => {
     const judge = getPreset(presets, 'judge')
     const banned = [
-      'bash', 'sandbox_exec', 'oast_register', 'oast_poll',
-      'browser_navigate', 'browser_act', 'browser_eval', 'browser_screenshot', 'browser_network',
+      'bash',
+      'sandbox_exec',
+      'oast_register',
+      'oast_poll',
+      'browser_navigate',
+      'browser_act',
+      'browser_eval',
+      'browser_screenshot',
+      'browser_network',
     ]
     for (const tool of banned) {
-      assert.equal(judge.tool_allowlist.includes(tool), false, `judge allows ${tool}`)
+      assert.equal(
+        judge.tool_allowlist.includes(tool),
+        false,
+        `judge allows ${tool}`,
+      )
     }
     assert.ok(judge.tool_allowlist.includes('memory_get'))
     assert.ok(judge.tool_allowlist.includes('issue_query'))
@@ -69,11 +87,24 @@ describe('preset yaml', () => {
     for (const id of ['planner', 'explore'] as const) {
       const p = getPreset(presets, id)
       assert.equal(p.readonly, true)
-      assert.equal(p.tool_allowlist.includes('issue_create'), false, `${id} allows issue_create`)
-      assert.equal(p.tool_allowlist.includes('oast_register'), false, `${id} allows oast`)
+      assert.equal(
+        p.tool_allowlist.includes('issue_create'),
+        false,
+        `${id} allows issue_create`,
+      )
+      assert.equal(
+        p.tool_allowlist.includes('oast_register'),
+        false,
+        `${id} allows oast`,
+      )
     }
-    assert.equal(getPreset(presets, 'planner').tool_allowlist.includes('sandbox_exec'), false)
-    assert.ok(getPreset(presets, 'explore').tool_allowlist.includes('sandbox_exec'))
+    assert.equal(
+      getPreset(presets, 'planner').tool_allowlist.includes('sandbox_exec'),
+      false,
+    )
+    assert.ok(
+      getPreset(presets, 'explore').tool_allowlist.includes('sandbox_exec'),
+    )
   })
 
   it('rejects malformed yaml', () => {
@@ -84,644 +115,286 @@ describe('preset yaml', () => {
   })
 
   it('specialist outputSchema requires summary and artifacts', () => {
-    assert.deepEqual(SPECIALIST_OUTPUT_SCHEMA.required, ['summary', 'artifacts'])
+    assert.deepEqual(SPECIALIST_OUTPUT_SCHEMA.required, [
+      'summary',
+      'artifacts',
+    ])
     assert.ok('findings_claimed' in SPECIALIST_OUTPUT_SCHEMA.properties)
     assert.ok('next_agent' in SPECIALIST_OUTPUT_SCHEMA.properties)
     assert.ok('blockers' in SPECIALIST_OUTPUT_SCHEMA.properties)
   })
 })
 
-describe('delegate', () => {
-  it('rejects unknown agent_id', async () => {
-    await assert.rejects(
-      () => executeDelegate(
-        { agent_id: 'not-a-real-agent', prompt: 'do work' },
-        { presets, workspaceDir: workspace() },
-      ),
-      (err: unknown) => {
-        assert.ok(err instanceof PresetError)
-        assert.match(err.message, /unknown agent_id: not-a-real-agent/)
-        return true
-      },
-    )
-  })
-
-  it('rejects parallel_group larger than max_parallel', () => {
-    const explore = getPreset(presets, 'explore')
-    assert.equal(explore.max_parallel, 3)
-    const four = [
-      { agent_id: 'explore', prompt: 'a' },
-      { agent_id: 'explore', prompt: 'b' },
-      { agent_id: 'explore', prompt: 'c' },
-      { agent_id: 'explore', prompt: 'd' },
-    ]
-    assert.throws(
-      () => assertParallelGroupSize(presets, four),
-      (err: unknown) => {
-        assert.ok(err instanceof PresetError)
-        assert.match(err.message, /parallel_group size 4 exceeds max_parallel 3 for agent_id explore/)
-        return true
-      },
-    )
-    assert.equal(getPreset(presets, 'verifier').max_parallel, 5)
-    const six = Array.from({ length: 6 }, (_, i) => ({ agent_id: 'verifier', prompt: `v${i}` }))
-    assert.throws(() => assertParallelGroupSize(presets, six), /max_parallel 5/)
-  })
-
-  it('accepts explore x3 and mixed specialists within caps', async () => {
-    const dir = workspace()
-    const result = await executeDelegate(
-      {
-        agent_id: 'explore',
-        prompt: 'default',
-        parallel_group: [
-          { prompt: 'surface one' },
-          { prompt: 'surface two' },
-          { prompt: 'surface three' },
-        ],
-      },
-      { presets, workspaceDir: dir, env: {} },
-    )
-    assert.equal(result.ok, true)
-    assert.equal(result.backend, 'in-process')
-    assert.equal(result.results.length, 3)
-    for (const child of result.results) {
-      assert.equal(child.agent_id, 'explore')
-      assert.ok(child.artifact_path.includes('/agents/explore/') || child.artifact_path.includes('\\agents\\explore\\'))
-      const onDisk = JSON.parse(readFileSync(child.artifact_path, 'utf8')) as { summary: string }
-      assert.equal(onDisk.summary, child.summary)
-      assert.match(child.summary, /in-process runner/)
-    }
-    const files = readdirSync(join(dir, 'agents', 'explore'))
-    assert.equal(files.length, 3)
-  })
-
-  it('creates child artifact dirs world-writable', async () => {
-    const dir = workspace()
-    await executeDelegate({ agent_id: 'explore', prompt: 'x' }, { presets, workspaceDir: dir })
-    const artifactDir = join(dir, 'agents', 'explore')
-    const st = statSync(artifactDir)
-    assert.ok(st.isDirectory())
-    // mkdirSync mode is umask-masked; production must chmodSync(dir, 0o777) after create.
-    assert.equal(CHILD_ARTIFACT_MKDIR_OPTS.mode, 0o777)
-    const delegateSrc = readFileSync(new URL('./delegate.ts', import.meta.url), 'utf8')
-    assert.match(delegateSrc, /chmodSync\(\s*dir,\s*0o777\s*\)/)
-    // NTFS does not surface POSIX other-write bits from chmod.
-    if (process.platform !== 'win32') {
-      assert.equal(st.mode & 0o002, 0o002)
-    }
-  })
-
-  it('fail-closes android/ios without hardware env', async () => {
-    assert.match(failClosedReason(getPreset(presets, 'android'), {}) ?? '', /ANDROID_SERIAL/)
-    assert.match(failClosedReason(getPreset(presets, 'ios'), {}) ?? '', /IOS_SSH_HOST/)
-    assert.equal(failClosedReason(getPreset(presets, 'android'), { ANDROID_SERIAL: 'emulator-5554' }), undefined)
-
-    const dir = workspace()
-    const result = await executeDelegate(
-      { agent_id: 'android', prompt: 'scan the device' },
-      { presets, workspaceDir: dir, env: {} },
-    )
-    assert.match(result.results[0]!.summary, /ANDROID_SERIAL/)
-    assert.ok(result.results[0]!.blockers.length > 0)
-  })
-
-  it('uses spawn when ctx.subagents.start exists', async () => {
-    const dir = workspace()
-    const parent = { id: 'orchestrator-session' }
-    let seen: Record<string, unknown> | undefined
-    const result = await executeDelegate(
-      { agent_id: 'research', prompt: 'map the stack' },
-      {
-        presets,
-        workspaceDir: dir,
-        parent,
-        subagents: {
-          async start(name, request) {
-            seen = { name, ...request }
-            return {
-              id: 'child-1',
-              localAgent: { id: 'child-1' },
-              result: Promise.resolve({
-                stopReason: 'completed',
-                structured: {
-                  summary: 'notes written',
-                  artifacts: ['/workspace/research/notes.md'],
-                  findings_claimed: [],
-                  next_agent: 'cve',
-                  blockers: [],
-                },
-              }),
-              async dispose() {},
-            }
-          },
-        },
-      },
-    )
-    assert.equal(result.backend, 'spawn')
-    assert.equal(seen?.name, 'spawn')
-    assert.equal(seen?.persona, getPreset(presets, 'research').persona)
-    assert.deepEqual(seen?.toolFilter, { allow: getPreset(presets, 'research').tool_allowlist })
-    assert.equal(seen?.outputSchema, SPECIALIST_OUTPUT_SCHEMA)
-    assert.equal(seen?.parent, parent)
-    const opts = seen?.agentOptions as {
-      neoAgentId?: string
-      provider?: string
-      model?: string
-      reasoningEffort?: string
-    }
-    assert.equal(opts.neoAgentId, 'research')
-    assert.equal(opts.provider, undefined)
-    assert.equal(opts.model, undefined)
-    assert.equal(opts.reasoningEffort, undefined)
-    assert.equal(result.results[0]!.summary, 'notes written')
-    assert.equal(result.results[0]!.next_agent, 'cve')
-  })
-
-  it('passes the resolved workhorse route on every spawn', async () => {
-    let seen: Record<string, unknown> | undefined
-    const parent = { id: 'orchestrator-session' }
-    await executeDelegate(
-      { agent_id: 'research', prompt: 'map the stack' },
-      {
-        presets,
-        workspaceDir: workspace(),
-        parent,
-        env: {
-          NEO_RESOLVED_WORKHORSE_PROVIDER: 'deepseek-official',
-          NEO_RESOLVED_WORKHORSE_MODEL: 'deepseek-v4-flash',
-        },
-        subagents: {
-          async start(_name, request) {
-            seen = request
-            return {
-              id: 'child-1',
-              localAgent: { id: 'child-1' },
-              result: Promise.resolve({
-                stopReason: 'completed',
-                structured: {
-                  summary: 'ok',
-                  artifacts: [],
-                  findings_claimed: [],
-                  next_agent: '',
-                  blockers: [],
-                },
-              }),
-              async dispose() {},
-            }
-          },
-        },
-      },
-    )
-    const opts = seen?.agentOptions as { provider?: string; model?: string; reasoningEffort?: string }
-    assert.equal(opts.provider, 'deepseek-official')
-    assert.equal(opts.model, 'deepseek-v4-flash')
-    assert.equal(opts.reasoningEffort, undefined)
-  })
-
-  it('passes workhorse reasoning effort only when it is set', async () => {
-    let seen: Record<string, unknown> | undefined
-    const parent = { id: 'orchestrator-session' }
-    await executeDelegate(
-      { agent_id: 'sandbox', prompt: 'run the check' },
-      {
-        presets,
-        workspaceDir: workspace(),
-        parent,
-        env: {
-          NEO_RESOLVED_WORKHORSE_PROVIDER: 'custom-workhorse',
-          NEO_RESOLVED_WORKHORSE_MODEL: 'qwen3:1.7b',
-          NEO_RESOLVED_WORKHORSE_REASONING_EFFORT: 'low',
-        },
-        subagents: {
-          async start(_name, request) {
-            seen = request
-            return {
-              id: 'child-1',
-              localAgent: { id: 'child-1' },
-              result: Promise.resolve({
-                stopReason: 'completed',
-                structured: {
-                  summary: 'ok',
-                  artifacts: [],
-                  findings_claimed: [],
-                  next_agent: '',
-                  blockers: [],
-                },
-              }),
-              async dispose() {},
-            }
-          },
-        },
-      },
-    )
-    const opts = seen?.agentOptions as { provider?: string; model?: string; reasoningEffort?: string }
-    assert.equal(opts.provider, 'custom-workhorse')
-    assert.equal(opts.model, 'qwen3:1.7b')
-    assert.equal(opts.reasoningEffort, 'low')
-  })
-
-  it('spawn request includes agentOptions.neoTaskId from the parent session id', async () => {
-    const parentId = 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78'
-    let seen: Record<string, unknown> | undefined
-    const origFetch = globalThis.fetch
-    globalThis.fetch = (async () => {
-      throw new Error('offline')
-    }) as typeof fetch
+describe('delegate authorization and lifecycle', () => {
+  const id = 'ef2b412d-84ac-4cde-8330-bdfd04154c78',
+    env = { NEO_TASK_ID: id, NEO_TASK_TOKEN: 'fixture' }
+  function parent() {
+    return { options: { neoTaskId: id, neoRunId: id, neoRunToken: 'parent' } }
+  }
+  async function fixture(fn: () => Promise<void>) {
+    const original = globalThis.fetch
+    globalThis.fetch = (async (url: any, init: any) => {
+      const body = init?.body ? JSON.parse(init.body) : {}
+      assert.equal(init?.headers?.authorization, 'Bearer fixture')
+      if (String(url).endsWith('/finish'))
+        return {
+          status: 200,
+          text: async () => JSON.stringify({ id, status: 'completed' }),
+        } as any
+      if (String(url).endsWith('/runs')) {
+        assert.equal(init.headers['x-neo-run-token'], 'parent')
+        return {
+          status: 200,
+          text: async () =>
+            JSON.stringify({ id: randomUUID(), run_token: 'child-secret' }),
+        } as any
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id,
+            mode: 'fast',
+            insights: [],
+            facts: [],
+            todos: [],
+            files: [],
+          }),
+      } as any
+    }) as any
     try {
-      await executeDelegate(
-        { agent_id: 'research', prompt: 'map the stack' },
-        {
-          presets,
-          workspaceDir: workspace(),
-          parent: { id: parentId },
-          subagents: {
-            async start(_name, request) {
-              seen = request
-              return {
-                id: 'child-1',
-                localAgent: { id: 'child-1' },
-                result: Promise.resolve({
-                  stopReason: 'completed',
-                  structured: {
-                    summary: 'ok',
-                    artifacts: [],
-                    findings_claimed: [],
-                    next_agent: '',
-                    blockers: [],
-                  },
-                }),
-                async dispose() {},
-              }
-            },
-          },
-        },
-      )
+      await fn()
     } finally {
-      globalThis.fetch = origFetch
+      globalThis.fetch = original
     }
-    const opts = seen?.agentOptions as { neoAgentId?: string; neoTaskId?: string }
-    assert.equal(opts.neoAgentId, 'research')
-    assert.equal(opts.neoTaskId, 'ef2b412d-84ac-4cde-8330-bdfd04154c78')
-  })
-
-  it('injects task memory as a user message', async () => {
-    const parentId = 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78'
-    let startRequest: Record<string, unknown> | undefined
-    let injected: unknown
-    const origFetch = globalThis.fetch
-    globalThis.fetch = (async () => ({
-      ok: true,
-      async text() {
-        return JSON.stringify({ insights: [], facts: [], todos: [], files: [] })
-      },
-    })) as typeof fetch
-    try {
-      await executeDelegate(
-        { agent_id: 'explore', prompt: 'map the host' },
-        {
-          presets,
-          workspaceDir: workspace(),
-          parent: { id: parentId },
-          env: { CONTROL_URL: 'http://control.test' },
-          subagents: {
-            async start(_name, request) {
-              startRequest = request
-              return {
-                id: 'child-1',
-                localAgent: {
-                  id: 'child-1',
-                  inject(payload: unknown) {
-                    injected = payload
-                  },
-                },
-                result: Promise.resolve({
-                  stopReason: 'completed',
-                  structured: {
-                    summary: 'ok',
-                    artifacts: [],
-                    findings_claimed: [],
-                    next_agent: '',
-                    blockers: [],
-                  },
-                }),
-                async dispose() {},
-              }
-            },
-          },
-        },
+  }
+  it('rejects malformed identity, unknown presets and forbidden planner relationship', async () =>
+    fixture(async () => {
+      await assert.rejects(
+        () =>
+          executeDelegate(
+            { agent_id: 'explore', prompt: 'x' },
+            { presets, workspaceDir: workspace(), env: {} },
+          ),
+        /identity required/,
       )
-    } finally {
-      globalThis.fetch = origFetch
-    }
-    assert.equal(startRequest !== undefined && !('inject' in startRequest), true)
-    const message = injected as {
-      role?: string
-      id?: string
-      source?: { kind?: string }
-      content?: Array<{ type?: string; text?: string }>
-    }
-    assert.equal(message.role, 'user')
-    assert.equal(message.source?.kind, 'user')
-    assert.match(
-      message.id ?? '',
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-    )
-    assert.equal(message.content?.[0]?.type, 'text')
-    assert.match(message.content?.[0]?.text ?? '', /Shared task memory/)
-  })
-
-  it('skips inject when task memory cannot be fetched', async () => {
-    const parentId = 'session-ef2b412d-84ac-4cde-8330-bdfd04154c78'
-    let injected = false
-    const origFetch = globalThis.fetch
-    globalThis.fetch = (async () => {
-      throw new Error('offline')
-    }) as typeof fetch
-    try {
+      await assert.rejects(
+        () =>
+          executeDelegate(
+            { agent_id: 'missing', prompt: 'x' },
+            { presets, workspaceDir: workspace(), env },
+          ),
+        /unknown agent_id/,
+      )
+      await assert.rejects(
+        () =>
+          executeDelegate(
+            { agent_id: 'recon', prompt: 'x' },
+            {
+              presets,
+              workspaceDir: workspace(),
+              env,
+              callerAgentId: 'planner',
+            },
+          ),
+        /planner may only/,
+      )
+    }))
+  it('caps per-preset groups and task-wide nested concurrency', async () =>
+    fixture(async () => {
+      assert.throws(
+        () =>
+          assertParallelGroupSize(
+            presets,
+            Array.from({ length: 4 }, () => ({ agent_id: 'explore' })),
+          ),
+        /max_parallel/,
+      )
+      await assert.rejects(
+        () =>
+          executeDelegate(
+            { agent_id: 'explore', prompt: 'x', parallel_group: [{}, {}, {}] },
+            {
+              presets,
+              workspaceDir: workspace(),
+              env: { ...env, NEO_TASK_CONCURRENCY: '2' },
+            },
+          ),
+        /concurrency limit/,
+      )
+    }))
+  it('registers child provenance, creates private run directory before start and propagates tokens/model', async () =>
+    fixture(async () => {
+      const dir = workspace()
+      let disposed = false
       const result = await executeDelegate(
-        { agent_id: 'explore', prompt: 'map the host' },
+        { agent_id: 'explore', prompt: 'x' },
         {
           presets,
-          workspaceDir: workspace(),
-          parent: { id: parentId },
-          env: { CONTROL_URL: 'http://control.test' },
+          workspaceDir: dir,
+          env: {
+            ...env,
+            NEO_RESOLVED_WORKHORSE_PROVIDER: 'p',
+            NEO_RESOLVED_WORKHORSE_MODEL: 'm',
+          },
+          parent: parent(),
           subagents: {
-            async start() {
+            start: async (_, request) => {
+              const options = request.agentOptions as any
+              assert.equal(options.neoTaskId, id)
+              assert.equal(options.neoRunToken, 'child-secret')
+              assert.equal(options.provider, 'p')
+              assert.equal(options.model, 'm')
+              assert.equal(
+                (request.toolFilter as any).allow.includes('bash'),
+                false,
+              )
+              assert.ok(
+                statSync(
+                  join(dir, 'tasks', id, 'agents', 'explore', options.neoRunId),
+                ).isDirectory(),
+              )
               return {
-                id: 'child-1',
-                localAgent: {
-                  id: 'child-1',
-                  inject() {
-                    injected = true
-                  },
-                },
                 result: Promise.resolve({
+                  structured: { summary: 'done', artifacts: [] },
                   stopReason: 'completed',
-                  structured: {
-                    summary: 'ok',
-                    artifacts: [],
-                    findings_claimed: [],
-                    next_agent: '',
-                    blockers: [],
-                  },
                 }),
-                async dispose() {},
+                dispose: async () => {
+                  disposed = true
+                },
               }
             },
           },
         },
       )
-      assert.equal(injected, false)
-      assert.equal(result.results[0]!.summary, 'ok')
-    } finally {
-      globalThis.fetch = origFetch
-    }
-  })
-
-  it('keeps this on ctx.subagents.start (DSH SubagentRuntime.expectProvider)', async () => {
-    class FakeSubagentRuntime {
-      expectProvider(name: string) {
-        if (name !== 'spawn') throw new Error(`no subagent provider registered for "${name}"`)
-        return { name }
-      }
-
-      async start(name: string, request: Record<string, unknown>) {
-        this.expectProvider(name)
-        return {
-          id: 'child-1',
-          localAgent: { id: 'child-1' },
-          result: Promise.resolve({
-            stopReason: 'completed',
-            structured: {
-              summary: `planner saw: ${String(request.label ?? '')}`,
-              artifacts: [],
-              findings_claimed: [],
-              next_agent: '',
-              blockers: [],
-            },
-          }),
-          async dispose() {},
-        }
-      }
-    }
-
-    const result = await executeDelegate(
-      { agent_id: 'planner', prompt: 'write /workspace/plan.md' },
-      {
-        presets,
-        workspaceDir: workspace(),
-        parent: { id: 'orchestrator-session' },
-        subagents: new FakeSubagentRuntime(),
-      },
-    )
-    assert.equal(result.backend, 'spawn')
-    assert.equal(result.results[0]!.summary, 'planner saw: planner')
-  })
-
-  it('drops unknown global tools from toolFilter so restrict() can apply', async () => {
-    // Omit skill (still in planner YAML) to prove live-catalog filtering.
-    const known = new Set([
-      'delegate',
-      'glob',
-      'grep',
-      'memory_get',
-      'memory_update',
-      'read',
-      'web_search',
-      'write',
-    ])
-    const planner = getPreset(presets, 'planner')
-    assert.ok(planner.tool_allowlist.includes('skill'))
-    assert.ok(planner.tool_allowlist.includes('web_search'))
-    assert.equal(planner.tool_allowlist.includes('web_fetch'), false)
-
-    let seen: Record<string, unknown> | undefined
-    const result = await executeDelegate(
-      { agent_id: 'planner', prompt: 'write /workspace/plan.md' },
-      {
-        presets,
-        workspaceDir: workspace(),
-        parent: { id: 'orchestrator-session' },
-        knownGlobalTools: known,
-        subagents: {
-          async start(_name, request) {
-            seen = request
-            const allow = (request.toolFilter as { allow: string[] }).allow
-            for (const name of allow) {
-              if (!known.has(name)) {
-                throw new Error(
-                  `tools.restrict() names unknown global tool "${name}"; known global tools: ${[...known].sort().join(', ')}`,
-                )
+      assert.equal(disposed, true)
+      assert.equal(result.results[0].summary, 'done')
+      assert.equal(CHILD_ARTIFACT_MKDIR_OPTS.mode, 0o770)
+      assert.ok(
+        result.results[0].artifact_path.includes(
+          '/tasks/' + id + '/agents/explore/',
+        ),
+      )
+      assert.equal(statSync(result.results[0].artifact_path).mode & 0o007, 0)
+    }))
+  it('settles child failures and preserves sibling completion evidence', async () =>
+    fixture(async () => {
+      let count = 0
+      const result = await executeDelegate(
+        {
+          agent_id: 'explore',
+          parallel_group: [{ prompt: 'a' }, { prompt: 'b' }],
+        },
+        {
+          presets,
+          workspaceDir: workspace(),
+          env,
+          parent: parent(),
+          subagents: {
+            start: async () => {
+              const n = count++
+              return {
+                result:
+                  n === 0
+                    ? Promise.reject(new Error('fixture failure'))
+                    : Promise.resolve({
+                        structured: { summary: 'survived', artifacts: [] },
+                      }),
+                dispose: async () => {},
               }
-            }
-            return {
-              id: 'child-1',
-              localAgent: { id: 'child-1' },
-              result: Promise.resolve({
-                stopReason: 'completed',
-                structured: {
-                  summary: 'plan written',
-                  artifacts: ['/workspace/plan.md'],
-                  findings_claimed: [],
-                  next_agent: '',
-                  blockers: [],
+            },
+          },
+        },
+      )
+      assert.equal(result.results.length, 2)
+      assert.equal(result.results[1].summary, 'survived')
+      assert.match(result.results[0].blockers[0], /fixture failure/)
+    }))
+  it('records a failed run when its artifact directory cannot be created', async () =>
+    fixture(async () => {
+      const dir = workspace()
+      writeFileSync(join(dir, 'tasks'), 'blocks directory creation')
+      const fetchImpl = globalThis.fetch
+      const finishes: any[] = []
+      globalThis.fetch = (async (url: any, init: any) => {
+        if (String(url).endsWith('/finish'))
+          finishes.push(JSON.parse(init.body))
+        return fetchImpl(url, init)
+      }) as any
+      await assert.rejects(
+        executeDelegate(
+          { agent_id: 'explore', prompt: 'x' },
+          { presets, workspaceDir: dir, env, parent: parent() },
+        ),
+        /ENOTDIR/,
+      )
+      assert.equal(finishes.length, 1)
+      assert.equal(finishes[0].status, 'failed')
+      assert.match(finishes[0].outcome.error, /ENOTDIR/)
+    }))
+  it('marks missing spawn capability unexecuted', async () =>
+    fixture(async () => {
+      const result = await executeDelegate(
+        { agent_id: 'explore', prompt: 'x' },
+        { presets, workspaceDir: workspace(), env, parent: parent() },
+      )
+      assert.match(result.results[0].summary, /No model child ran/)
+      assert.ok(
+        result.results[0].blockers.includes('subagent spawn unavailable'),
+      )
+    }))
+  it('child deadline disposes stalled runtime and records failed outcome', async () =>
+    fixture(async () => {
+      let disposed = false
+      const keepalive = setTimeout(() => {}, 100)
+      try {
+        const result = await executeDelegate(
+          { agent_id: 'explore', prompt: 'stall' },
+          {
+            presets,
+            workspaceDir: workspace(),
+            env: { ...env, NEO_CHILD_TIMEOUT_MS: '5' },
+            parent: parent(),
+            subagents: {
+              start: async () => ({
+                result: new Promise(() => {}),
+                dispose: async () => {
+                  disposed = true
                 },
               }),
-              async dispose() {},
-            }
-          },
-        },
-      },
-    )
-
-    const allow = (seen?.toolFilter as { allow: string[] }).allow
-    assert.equal(allow.includes('skill'), false)
-    assert.ok(allow.includes('web_search'))
-    assert.ok(allow.includes('write'))
-    assert.equal(result.results[0]!.summary, 'plan written')
-  })
-
-  it('keeps DSH agent-plane builtins when host schemas() is plugin-only', async () => {
-    const pluginOnly = [
-      'delegate', 'scope_check', 'memory_get', 'memory_update',
-      'sandbox_exec', 'issue_query', 'issue_create',
-    ]
-    let seen: Record<string, unknown> | undefined
-    await executeDelegate(
-      { agent_id: 'research', prompt: 'map the stack' },
-      {
-        presets,
-        workspaceDir: workspace(),
-        parent: { id: 'orchestrator-session' },
-        knownGlobalTools: pluginOnly,
-        // NEW: parent-visible catalog, as tools.schemas(parent) would return
-        parentVisibleTools: [...pluginOnly, 'read', 'write', 'glob', 'grep', 'web_search', 'skill'],
-        subagents: {
-          async start(_name, request) {
-            seen = request
-            return {
-              id: 'child-1',
-              localAgent: {},
-              result: Promise.resolve({
-                stopReason: 'completed',
-                structured: { summary: 'ok', artifacts: [] },
-              }),
-              async dispose() {},
-            }
-          },
-        },
-      },
-    )
-    const allow = (seen?.toolFilter as { allow: string[] }).allow
-    for (const name of ['read', 'write', 'glob', 'grep', 'web_search', 'skill']) {
-      assert.ok(allow.includes(name), `research lost ${name}`)
-    }
-    assert.equal(allow.includes('web_fetch'), false)
-    assert.equal(allow.includes('bash'), false)
-  })
-
-  it('resolves knownGlobalTools at execute time so planner children keep delegate', async () => {
-    const names = [
-      'memory_get',
-      'memory_update',
-      'read',
-      'glob',
-      'grep',
-      'write',
-      'web_search',
-      'skill',
-    ]
-    const toolsApi = {
-      schemas: () => names.map((name) => ({ name })),
-    }
-    assert.equal(toolsApi.schemas().some((schema) => schema.name === 'delegate'), false)
-
-    let seen: Record<string, unknown> | undefined
-    const subagents = {
-      async start(_name: string, request: Record<string, unknown>) {
-        seen = request
-        return {
-          id: 'child-1',
-          localAgent: { id: 'child-1' },
-          result: Promise.resolve({
-            stopReason: 'completed',
-            structured: {
-              summary: 'plan written',
-              artifacts: ['/workspace/plan.md'],
-              findings_claimed: [],
-              next_agent: '',
-              blockers: [],
             },
-          }),
-          async dispose() {},
-        }
-      },
-    }
-
-    const snapshotAtCreate = toolsApi.schemas()
-      .map((schema) => schema.name)
-      .filter((name): name is string => typeof name === 'string' && name.length > 0)
-
-    const [delegate] = createTools({
-      presets,
-      workspaceDir: workspace(),
-      env: {},
-      subagents,
-      knownGlobalTools: snapshotAtCreate,
-      getSubagents: () => subagents,
-      getKnownGlobalTools: () => toolsApi.schemas()
-        .map((schema) => schema.name)
-        .filter((name): name is string => typeof name === 'string' && name.length > 0),
-    })
-
-    names.push('delegate')
-
-    await delegate.execute(
-      { agent_id: 'planner', prompt: 'write /workspace/plan.md' },
-      { signal: new AbortController().signal, agent: { id: 'orchestrator-session' } },
+          },
+        )
+        assert.equal(disposed, true)
+        assert.equal(result.ok, false)
+        assert.match(result.results[0].blockers[0], /timeout|abort/i)
+      } finally {
+        clearTimeout(keepalive)
+      }
+    }))
+  it('fails closed for unsupported hardware and Ghidra despite environment strings', () => {
+    assert.match(
+      failClosedReason(getPreset(presets, 'android'), {
+        ANDROID_SERIAL: 'attached',
+      })!,
+      /unavailable/,
     )
-
-    const allow = (seen?.toolFilter as { allow: string[] } | undefined)?.allow
-    assert.ok(allow, 'expected spawn toolFilter')
-    assert.ok(
-      allow.includes('delegate'),
-      `planner toolFilter.allow missing delegate: ${allow.join(', ')}`,
+    assert.match(
+      failClosedReason(getPreset(presets, 'ios'), {
+        IOS_SSH_HOST: 'attached',
+      })!,
+      /unavailable/,
+    )
+    assert.match(
+      failClosedReason(getPreset(presets, 'ghidra'), {})!,
+      /unavailable/,
     )
   })
-
-  it('judge may only delegate to verifier', async () => {
-    await assert.rejects(
-      () => executeDelegate(
-        { agent_id: 'sandbox', prompt: 'exploit' },
-        { presets, workspaceDir: workspace(), callerAgentId: 'judge' },
-      ),
-      /judge may only delegate to verifier/,
-    )
-    const ok = await executeDelegate(
-      {
-        agent_id: 'verifier',
-        prompt: 'retest finding 1',
-        parallel_group: [
-          { prompt: 'claim a' },
-          { prompt: 'claim b' },
-        ],
-      },
-      { presets, workspaceDir: workspace(), callerAgentId: 'judge' },
-    )
-    assert.equal(ok.results.length, 2)
-  })
-
-  it('resolveChildren fills agent_id from the parent call', () => {
-    const kids = resolveChildren({
-      agent_id: 'verifier',
-      prompt: 'fallback',
-      parallel_group: [{ prompt: 'one' }, { agent_id: 'verifier', prompt: 'two' }],
-    })
-    assert.deepEqual(kids, [
-      { agent_id: 'verifier', prompt: 'one' },
-      { agent_id: 'verifier', prompt: 'two' },
-    ])
+  it('has persisted plan and verifier tools', () => {
+    const names = createTools({ presets, env }).map((t) => t.name)
+    assert.ok(names.includes('plan_submit'))
+    assert.ok(names.includes('verification_record'))
   })
 })
 
@@ -732,7 +405,10 @@ describe('catalog prompt', () => {
     assert.match(text, /Mode machine/)
     assert.match(text, /\/workspace\/plan\.md/)
     assert.match(text, /iteration-N\.md/)
-    assert.equal(buildModeMachinePrompt('thorough').includes('≤5 verifiers'), true)
+    assert.equal(
+      buildModeMachinePrompt('thorough').includes('≤5 verifiers'),
+      true,
+    )
     for (const id of REQUIRED_PRESET_IDS) {
       assert.match(text, new RegExp(`- ${id} `))
     }
@@ -751,8 +427,11 @@ describe('catalog prompt', () => {
   })
 
   it('thorough mode machine does not mention exit_plan_mode or plan mode', () => {
-    assert.equal(/plan mode|exit_plan_mode/i.test(buildModeMachinePrompt('thorough')), false)
-    assert.match(buildModeMachinePrompt('thorough'), /ask_user_question/)
+    assert.equal(
+      /plan mode|exit_plan_mode/i.test(buildModeMachinePrompt('thorough')),
+      false,
+    )
+    assert.match(buildModeMachinePrompt('thorough'), /plan_submit/)
   })
 })
 

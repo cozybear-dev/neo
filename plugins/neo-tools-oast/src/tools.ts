@@ -1,4 +1,9 @@
-import { pollOast, registerOast, renderSafe, type ClientOptions } from './client.ts'
+import {
+  pollOast,
+  registerOast,
+  renderSafe,
+  type ClientOptions,
+} from './client.ts'
 
 export type ToolDef = {
   name: string
@@ -6,7 +11,10 @@ export type ToolDef = {
   parameters: Record<string, unknown>
   output: {
     schema: unknown
-    render: (args: unknown, value: unknown) => Array<{ type: 'text'; text: string }>
+    render: (
+      args: unknown,
+      value: unknown,
+    ) => Array<{ type: 'text'; text: string }>
   }
   execute: (
     args: Record<string, unknown>,
@@ -42,7 +50,8 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
           type: 'string',
           required: true,
           enum: ['http', 'dns'],
-          description: 'Callback kind: http returns an http:// URL; dns returns a hostname.',
+          description:
+            'Callback kind: http returns an http:// URL; dns returns a hostname.',
         },
       },
       output: {
@@ -58,16 +67,27 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         render: renderSafe,
       },
       async execute(args, exec) {
-        const kind = args.kind === 'dns' ? 'dns' : 'http'
+        if (args.kind !== 'dns' && args.kind !== 'http')
+          throw new Error('kind must be http or dns')
+        const kind = args.kind
         return registerOast({ kind }, { ...options, signal: exec.signal })
       },
     },
     {
       name: 'oast_poll',
-      description: 'Poll an OAST registration for out-of-band interactions. Optional wait_seconds retries until hit or timeout.',
+      description:
+        'Poll an OAST registration for out-of-band interactions. Optional wait_seconds retries until hit or timeout.',
       parameters: {
-        id: { type: 'string', required: true, description: 'Id returned by oast_register.' },
-        wait_seconds: { type: 'number', description: 'Seconds to wait for an interaction (default 0 = single poll).' },
+        id: {
+          type: 'string',
+          required: true,
+          description: 'Id returned by oast_register.',
+        },
+        wait_seconds: {
+          type: 'number',
+          description:
+            'Seconds to wait for an interaction (default 0 = single poll).',
+        },
       },
       output: {
         schema: { type: 'array', items: interactionSchema },
@@ -77,7 +97,10 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         return pollOast(
           {
             id: String(args.id ?? ''),
-            wait_seconds: typeof args.wait_seconds === 'number' ? args.wait_seconds : undefined,
+            wait_seconds:
+              typeof args.wait_seconds === 'number'
+                ? args.wait_seconds
+                : undefined,
           },
           { ...options, signal: exec.signal },
         )

@@ -18,14 +18,14 @@ import { createTools } from './tools.ts'
 const here = dirname(fileURLToPath(import.meta.url))
 
 describe('workspace file mode', () => {
-  it('adds group and other read to owner-only files', () => {
-    assert.equal(withGroupOtherRead(0o600), 0o644)
-    assert.equal(withGroupOtherRead(0o700), 0o744)
+  it('adds group read without world access', () => {
+    assert.equal(withGroupOtherRead(0o600), 0o640)
+    assert.equal(withGroupOtherRead(0o700), 0o740)
   })
 
-  it('leaves a mode that is already group- and world-readable unchanged', () => {
-    assert.equal(withGroupOtherRead(0o755), 0o755)
-    assert.equal(withGroupOtherRead(0o644), 0o644)
+  it('removes world access and preserves owner/group execute', () => {
+    assert.equal(withGroupOtherRead(0o755), 0o750)
+    assert.equal(withGroupOtherRead(0o640), 0o640)
   })
 
   it('treats NEO_WORKSPACE as the root and ignores a lookalike prefix', () => {
@@ -33,34 +33,49 @@ describe('workspace file mode', () => {
     assert.equal(workspaceRoot({ NEO_WORKSPACE: '/tmp/ws/' }), '/tmp/ws')
     assert.equal(isUnderWorkspace('/workspace', '/workspace/agents/a.md'), true)
     assert.equal(isUnderWorkspace('/workspace', '/workspace'), true)
-    assert.equal(isUnderWorkspace('/workspace', '/workspace-backup/a.md'), false)
+    assert.equal(
+      isUnderWorkspace('/workspace', '/workspace-backup/a.md'),
+      false,
+    )
     assert.equal(isUnderWorkspace('/workspace', '/etc/passwd'), false)
   })
 
   it('chmods a regular file under the workspace when group or other read is missing', () => {
     const calls: Array<[string, number]> = []
     const { target, observation } = present('/workspace/agents/a.md')
-    relaxObservedFile(target, observation, deps({
-      chmod: (path, mode) => calls.push([path, mode]),
-    }))
-    assert.deepEqual(calls, [['/workspace/agents/a.md', 0o644]])
+    relaxObservedFile(
+      target,
+      observation,
+      deps({
+        chmod: (path, mode) => calls.push([path, mode]),
+      }),
+    )
+    assert.deepEqual(calls, [['/workspace/agents/a.md', 0o640]])
   })
 
   it('does not chmod directories, files outside the workspace, or absent observations', () => {
     const calls: string[] = []
     const chmod = (path: string) => calls.push(path)
     const directory = present('/workspace')
-    relaxObservedFile(directory.target, directory.observation, deps({
-      processPath: () => '/workspace',
-      stat: () => ({ isFile: () => false, mode: 0o777 }),
-      chmod,
-    }))
+    relaxObservedFile(
+      directory.target,
+      directory.observation,
+      deps({
+        processPath: () => '/workspace',
+        stat: () => ({ isFile: () => false, mode: 0o777 }),
+        chmod,
+      }),
+    )
     const link = present('/workspace/link')
-    relaxObservedFile(link.target, link.observation, deps({
-      processPath: () => '/etc/passwd',
-      stat: () => ({ isFile: () => true, mode: 0o600 }),
-      chmod,
-    }))
+    relaxObservedFile(
+      link.target,
+      link.observation,
+      deps({
+        processPath: () => '/etc/passwd',
+        stat: () => ({ isFile: () => true, mode: 0o600 }),
+        chmod,
+      }),
+    )
     relaxObservedFile(
       { targetKey: '/workspace/a.md', displayPath: '/workspace/a.md' },
       { kind: 'absent' },
@@ -71,12 +86,28 @@ describe('workspace file mode', () => {
 
   it('swallows stat and chmod failures', () => {
     const file = present('/workspace/a.md')
-    assert.doesNotThrow(() => relaxObservedFile(file.target, file.observation, deps({
-      stat: () => { throw new Error('stat failed') },
-    })))
-    assert.doesNotThrow(() => relaxObservedFile(file.target, file.observation, deps({
-      chmod: () => { throw new Error('chmod failed') },
-    })))
+    assert.doesNotThrow(() =>
+      relaxObservedFile(
+        file.target,
+        file.observation,
+        deps({
+          stat: () => {
+            throw new Error('stat failed')
+          },
+        }),
+      ),
+    )
+    assert.doesNotThrow(() =>
+      relaxObservedFile(
+        file.target,
+        file.observation,
+        deps({
+          chmod: () => {
+            throw new Error('chmod failed')
+          },
+        }),
+      ),
+    )
   })
 })
 
@@ -91,7 +122,10 @@ describe('list_dir', () => {
         { name: 'nested', type: 'directory' },
       ],
     })
-    assert.equal(tool.output.render({}, value)[0]?.text, 'a.md file 12\nnested directory')
+    assert.equal(
+      tool.output.render({}, value)[0]?.text,
+      'a.md file 12\nnested directory',
+    )
     assertExecuteResultValid(tool, value)
   })
 
@@ -109,10 +143,7 @@ describe('list_dir', () => {
       () => tool.execute({ path: '/workspace/missing' }, exec()),
       /not found/,
     )
-    await assert.rejects(
-      () => listDirectory('   ', fakeFs()),
-      /non-empty/,
-    )
+    await assert.rejects(() => listDirectory('   ', fakeFs()), /non-empty/)
   })
 })
 
@@ -159,8 +190,10 @@ function fakeFs() {
       return { targetKey: path, displayPath: path }
     },
     async stat(target: { displayPath: string }) {
-      if (target.displayPath === '/workspace') return { type: 'directory' as const }
-      if (target.displayPath === '/workspace/a.md') return { type: 'file' as const, size: 12 }
+      if (target.displayPath === '/workspace')
+        return { type: 'directory' as const }
+      if (target.displayPath === '/workspace/a.md')
+        return { type: 'file' as const, size: 12 }
       return undefined
     },
     async listDir() {

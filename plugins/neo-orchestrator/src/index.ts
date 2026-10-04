@@ -42,7 +42,10 @@ function asSubagents(ctx: Context): SubagentStart | undefined {
   return raw
 }
 
-function knownGlobalTools(ctx: Context, parent?: unknown): string[] | undefined {
+function knownGlobalTools(
+  ctx: Context,
+  parent?: unknown,
+): string[] | undefined {
   const tools = (ctx.get('tools') ?? ctx.tools) as
     | { schemas?: (scope?: unknown) => Array<{ name?: string }> }
     | undefined
@@ -51,14 +54,22 @@ function knownGlobalTools(ctx: Context, parent?: unknown): string[] | undefined 
 
 export function apply(ctx: Context): void {
   const presets = loadPresetsFromDir(resolvePresetsDir())
-  const workspaceDir = process.env.NEO_WORKSPACE || '/workspace'
+  const workspaceDir = process.env.NEO_WORKSPACE_BASE || '/workspace'
 
   const promptApi = ctx.get('systemPrompt') as Context['systemPrompt']
   if (promptApi && typeof promptApi.section === 'function') {
     promptApi.section({
       name: 'neo:orchestrator',
       order: 50,
-      text: (context) => catalogSectionText(context, presets, process.env.NEO_MODE || 'thorough'),
+      text: (context) =>
+        catalogSectionText(
+          context,
+          presets,
+          (context.agent as any)?.options?.neoMode ||
+            process.env.NEO_MODE ||
+            process.env.NEO_MODE_DEFAULT ||
+            'thorough',
+        ),
     })
   }
 
@@ -68,5 +79,6 @@ export function apply(ctx: Context): void {
     env: process.env,
     getSubagents: () => asSubagents(ctx),
     getKnownGlobalTools: (parent?: unknown) => knownGlobalTools(ctx, parent),
-  })) ctx.tools.register(defineTool(def))
+  }))
+    ctx.tools.register(defineTool(def))
 }

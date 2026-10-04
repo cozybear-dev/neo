@@ -5,16 +5,16 @@ description: 'How to write a finding: title, impact, evidence paths, reproductio
 
 # Security findings
 
-A claim is not an issue until Thorough verification says `confirmed`.
+Record candidate issues as unverified. Confirmation requires an independent verifier run and persisted proof.
 
 ## Shape
 
 - **title** — attacker action + impact, not a tool name
 - **severity** — critical/high/medium/low/info with a one-line justification
 - **host** — allowlisted host only
-- **evidence_paths** — files under `/workspace` a verifier can reopen
+- **evidence_paths** — files under the assigned task workspace a verifier can reopen
 - **reproduction** — numbered steps from a clean session
-- **verdict** — `unverified` (Fast) or `confirmed` (after verifier)
+- **status** — create as `unverified`; an independent verifier calls `verification_record`, then promote with `issue_update` using its proof ID and the candidate revision
 
 ## Do not
 

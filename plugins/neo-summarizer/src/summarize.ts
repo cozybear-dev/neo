@@ -1,3 +1,4 @@
+import { redactText, environmentSecrets } from '../../neo-runtime/redact.mjs'
 /** Fixed density matching @deepseek-ai/dsh-token-meter (CHARS_PER_TOKEN = 4). */
 export const CHARS_PER_TOKEN = 4
 
@@ -5,7 +6,7 @@ export const CHARS_PER_TOKEN = 4
 export const SUMMARIZE_THRESHOLD_TOKENS = 10_000
 
 /** Pre-truncate input to the LLM when over this many heuristic tokens. */
-export const PRE_TRUNCATE_TOKENS = 900_000
+export const PRE_TRUNCATE_TOKENS = 16_000
 
 /** Cap for the condensed summary returned to the model. */
 export const SUMMARY_MAX_TOKENS = 1_500
@@ -48,16 +49,23 @@ export function truncateToTokens(text: string, maxTokens: number): string {
   return text.slice(0, head) + marker + (tail > 0 ? text.slice(-tail) : '')
 }
 
-export function flattenPlainText(content: ReadonlyArray<{ type: string; text?: string }>): string | undefined {
+export function flattenPlainText(
+  content: ReadonlyArray<{ type: string; text?: string }>,
+): string | undefined {
   let text = ''
   for (const block of content) {
-    if (block.type !== 'text' || typeof block.text !== 'string') return undefined
+    if (block.type !== 'text' || typeof block.text !== 'string')
+      return undefined
     text += block.text
   }
   return text
 }
 
-function buildSummaryPrompt(toolName: string, objective: string, output: string): { system: string; user: string } {
+function buildSummaryPrompt(
+  toolName: string,
+  objective: string,
+  output: string,
+): { system: string; user: string } {
   return {
     system: [
       'You summarize oversized tool outputs for a security-assessment agent.',
@@ -88,22 +96,33 @@ export async function processLargeToolOutput(input: {
   provider?: string
   model?: string
   signal?: AbortSignal
+  inputBudgetTokens?: number
 }): Promise<ProcessResult> {
   const tokens = estimateTokens(input.text)
   if (tokens <= SUMMARIZE_THRESHOLD_TOKENS) {
     return { text: input.text, action: 'unchanged' }
   }
 
-  const objective = (input.objective && input.objective.trim()) || 'Continue the current agent task'
+  const objective =
+    (input.objective && input.objective.trim()) ||
+    'Continue the current agent task'
   let toSummarize = input.text
-  if (tokens > PRE_TRUNCATE_TOKENS) {
-    toSummarize = truncateToTokens(input.text, PRE_TRUNCATE_TOKENS)
-  }
+  const budget = Math.max(
+    2_000,
+    Math.min(
+      input.inputBudgetTokens ?? PRE_TRUNCATE_TOKENS,
+      PRE_TRUNCATE_TOKENS,
+    ),
+  )
+  if (tokens > budget) toSummarize = truncateToTokens(input.text, budget)
 
   const provider = input.provider?.trim()
   const model = input.model?.trim()
   if (!input.llm || !provider || !model) {
-    return { text: truncateToTokens(input.text, SUMMARY_MAX_TOKENS), action: 'truncated' }
+    return {
+      text: truncateToTokens(input.text, SUMMARY_MAX_TOKENS),
+      action: 'truncated',
+    }
   }
 
   try {
@@ -123,15 +142,24 @@ export async function processLargeToolOutput(input: {
     })
     const trimmed = summary.trim()
     if (trimmed.length === 0) {
-      return { text: truncateToTokens(input.text, SUMMARY_MAX_TOKENS), action: 'truncated' }
+      return {
+        text: truncateToTokens(input.text, SUMMARY_MAX_TOKENS),
+        action: 'truncated',
+      }
     }
-    const capped = estimateTokens(trimmed) > SUMMARY_MAX_TOKENS
-      ? truncateToTokens(trimmed, SUMMARY_MAX_TOKENS)
-      : trimmed
+    const capped =
+      estimateTokens(trimmed) > SUMMARY_MAX_TOKENS
+        ? truncateToTokens(trimmed, SUMMARY_MAX_TOKENS)
+        : trimmed
     const header = `[neo-summarizer] Condensed tool result for "${input.toolName}" (was ~${tokens} tokens):\n\n`
     return { text: header + capped, action: 'summarized' }
-  } catch {
-    return { text: truncateToTokens(input.text, SUMMARY_MAX_TOKENS), action: 'truncated' }
+  } catch (error) {
+    if (input.signal?.aborted || (error as Error)?.name === 'AbortError')
+      throw error
+    return {
+      text: truncateToTokens(input.text, SUMMARY_MAX_TOKENS),
+      action: 'truncated',
+    }
   }
 }
 
@@ -147,7 +175,11 @@ export async function collectStreamText(
       text += chunk.text
     } else if (type === 'block-end') {
       const block = chunk.block as { type?: string; text?: string } | undefined
-      if (block?.type === 'text' && typeof block.text === 'string' && text.length === 0) {
+      if (
+        block?.type === 'text' &&
+        typeof block.text === 'string' &&
+        text.length === 0
+      ) {
         text = block.text
       }
     } else if (type === 'finish') {
@@ -163,15 +195,19 @@ export async function collectStreamText(
 
 /** Wrap ctx.llm.stream into the LlmComplete used by processLargeToolOutput. */
 export function llmCompleteFromStream(
-  streamFn: (options: Record<string, unknown>) => AsyncIterable<Record<string, unknown>>,
+  streamFn: (
+    options: Record<string, unknown>,
+  ) => AsyncIterable<Record<string, unknown>>,
 ): LlmComplete {
   return async (input) => {
-    const messages = [{
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: [{ type: 'text', text: input.user }],
-      source: { kind: 'plugin', plugin: 'neo-summarizer' },
-    }]
+    const messages = [
+      {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: [{ type: 'text', text: input.user }],
+        source: { kind: 'plugin', plugin: 'neo-summarizer' },
+      },
+    ]
     const options: Record<string, unknown> = {
       provider: input.provider,
       model: input.model,
@@ -187,7 +223,12 @@ export function llmCompleteFromStream(
 export type ContentBlock = { type: string; text?: string }
 
 export type PostToolDecision =
-  | { kind: 'accept'; content?: ContentBlock[]; value?: unknown; additionalContexts?: unknown[] }
+  | {
+      kind: 'accept'
+      content?: ContentBlock[]
+      value?: unknown
+      additionalContexts?: unknown[]
+    }
   | { kind: 'block'; feedback: ContentBlock[]; additionalContexts?: unknown[] }
 
 export type ToolExecution = {
@@ -207,14 +248,19 @@ export type ToolExecutionResult = {
 
 export type SummarizerDeps = {
   getLlm: () => LlmComplete | null
-  getDefaultModel: (exec: ToolExecution) => { provider?: string; model?: string }
+  getDefaultModel: (exec: ToolExecution) => {
+    provider?: string
+    model?: string
+  }
   getObjective?: (exec: ToolExecution) => string
+  persist?: (text: string, exec: ToolExecution) => Promise<string>
 }
 
 export function resolveObjective(exec: ToolExecution): string {
   const header = exec.agent?.session?.header
   const fromHeader = header?.goal ?? header?.title
-  if (typeof fromHeader === 'string' && fromHeader.trim()) return fromHeader.trim()
+  if (typeof fromHeader === 'string' && fromHeader.trim())
+    return fromHeader.trim()
   const fromOpts = exec.agent?.options?.objective
   if (typeof fromOpts === 'string' && fromOpts.trim()) return fromOpts.trim()
   return 'Continue the current agent task'
@@ -231,7 +277,8 @@ export function createPostExecuteHandler(deps: SummarizerDeps) {
     next: () => Promise<PostToolDecision>,
   ): Promise<PostToolDecision> => {
     const decision = await next()
-    if (decision.kind !== 'accept' || Object.hasOwn(decision, 'value')) return decision
+    if (decision.kind !== 'accept' || Object.hasOwn(decision, 'value'))
+      return decision
     // Nested Code Mode sub-calls: leave model-facing parent result to the outer arm.
     if (exec.parent !== undefined) return decision
 
@@ -239,9 +286,14 @@ export function createPostExecuteHandler(deps: SummarizerDeps) {
     const text = flattenPlainText(content)
     if (text === undefined) return decision
 
+    const safeText = redactText(text, environmentSecrets())
+    const artifact =
+      estimateTokens(text) > SUMMARIZE_THRESHOLD_TOKENS && deps.persist
+        ? await deps.persist(text, exec)
+        : undefined
     const { provider, model } = deps.getDefaultModel(exec)
     const processed = await processLargeToolOutput({
-      text,
+      text: safeText,
       toolName: exec.name,
       objective: (deps.getObjective ?? resolveObjective)(exec),
       llm: deps.getLlm(),
@@ -250,7 +302,12 @@ export function createPostExecuteHandler(deps: SummarizerDeps) {
       signal: exec.signal,
     })
 
-    if (processed.action === 'unchanged') return decision
-    return { kind: 'accept', content: [{ type: 'text', text: processed.text }] }
+    if (processed.action === 'unchanged' && safeText === text) return decision
+    const reference = artifact ? `\n\nRaw evidence: ${artifact}` : ''
+    return {
+      ...decision,
+      kind: 'accept',
+      content: [{ type: 'text', text: processed.text + reference }],
+    }
   }
 }

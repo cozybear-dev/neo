@@ -1,4 +1,9 @@
-import { renderSafe, replayTraffic, searchTraffic, type ClientOptions } from './client.ts'
+import {
+  renderSafe,
+  replayTraffic,
+  searchTraffic,
+  type ClientOptions,
+} from './client.ts'
 
 export type ToolDef = {
   name: string
@@ -6,7 +11,10 @@ export type ToolDef = {
   parameters: Record<string, unknown>
   output: {
     schema: unknown
-    render: (args: unknown, value: unknown) => Array<{ type: 'text'; text: string }>
+    render: (
+      args: unknown,
+      value: unknown,
+    ) => Array<{ type: 'text'; text: string }>
   }
   execute: (
     args: Record<string, unknown>,
@@ -34,9 +42,13 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
     {
       name: 'traffic_search',
       description:
-        'Grep captured HTTP requests in /workspace/traffic/http.jsonl (method, URL, headers, body).',
+        'Grep captured HTTP requests in task-owned traffic JSONL (method, URL, headers, body).',
       parameters: {
-        query: { type: 'string', required: true, description: 'Case-insensitive substring over the JSONL records.' },
+        query: {
+          type: 'string',
+          required: true,
+          description: 'Case-insensitive substring over the JSONL records.',
+        },
       },
       output: {
         schema: { type: 'array', items: capturedRequest },
@@ -54,11 +66,16 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
       description:
         'Replay a captured request by id. Optional edits for method/headers/body/path. Destination host is pinned to the original (cannot change).',
       parameters: {
-        id: { type: 'string', required: true, description: 'Captured request id.' },
+        id: {
+          type: 'string',
+          required: true,
+          description: 'Captured request id.',
+        },
         edits: {
           type: 'object',
           additionalProperties: true,
-          description: 'Optional method, headers, body, or url (same host only).',
+          description:
+            'Optional method, headers, body, or url (same host only).',
         },
       },
       output: {
@@ -77,9 +94,12 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         return replayTraffic(
           {
             id: String(args.id ?? ''),
-            edits: args.edits && typeof args.edits === 'object' && !Array.isArray(args.edits)
-              ? args.edits as Record<string, unknown>
-              : undefined,
+            edits:
+              args.edits &&
+              typeof args.edits === 'object' &&
+              !Array.isArray(args.edits)
+                ? (args.edits as Record<string, unknown>)
+                : undefined,
           },
           { ...options, signal: exec.signal },
         )

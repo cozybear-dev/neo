@@ -21,3 +21,9 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Compiled output is always rebuilt from source.
+**/dist/
+
+.neo-task.json
+backups/

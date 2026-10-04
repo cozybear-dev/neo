@@ -1,8 +1,10 @@
+import { requireTaskId } from '../../neo-runtime/contracts.mjs'
 import {
   constants,
   createCipheriv,
   createDecipheriv,
   generateKeyPairSync,
+  generateKeyPair,
   privateDecrypt,
   publicEncrypt,
   randomBytes,
@@ -43,6 +45,10 @@ export type OastSession = {
   publicKeyPem: string
   serverHost: string
   kind: OastKind
+  taskId: string
+  createdAt: number
+  callbackScheme: string
+  callbackPort: string
 }
 
 export type OastStore = Map<string, OastSession>
@@ -67,6 +73,14 @@ export type Interaction = {
 
 const defaultStore: OastStore = new Map()
 const ALPHABET = '0123456789abcdefghijklmnopqrstuv'
+const NONCE_ALPHABET = 'ybndrfg8ejkmcpqxot1uwisza345h769'
+export function randomNonce(length = 13): string {
+  const bytes = randomBytes(length)
+  return Array.from({ length }, (_, i) => NONCE_ALPHABET[bytes[i]! % 32]).join(
+    '',
+  )
+}
+const TTL = 60 * 60 * 1000
 
 export function interactshUrl(env: EnvMap = process.env): string {
   return (env.INTERACTSH_URL ?? 'http://interactsh:80').replace(/\/+$/, '')
@@ -104,13 +118,19 @@ export function generateClientKeys(): {
   const lines = spkiB64.match(/.{1,64}/g) ?? [spkiB64]
   const publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${lines.join('\n')}\n-----END PUBLIC KEY-----\n`
   return {
-    publicKeyB64: Buffer.from(encodePublicKeyPem(pair.publicKey)).toString('base64'),
+    publicKeyB64: Buffer.from(encodePublicKeyPem(pair.publicKey)).toString(
+      'base64',
+    ),
     privateKeyPem: pair.privateKey,
     publicKeyPem,
   }
 }
 
-export function decryptMessage(privateKeyPem: string, aesKeyB64: string, secureMessage: string): string {
+export function decryptMessage(
+  privateKeyPem: string,
+  aesKeyB64: string,
+  secureMessage: string,
+): string {
   const aesKey = privateDecrypt(
     {
       key: privateKeyPem,
@@ -124,11 +144,16 @@ export function decryptMessage(privateKeyPem: string, aesKeyB64: string, secureM
   const iv = cipherText.subarray(0, 16)
   const data = cipherText.subarray(16)
   const decipher = createDecipheriv('aes-256-ctr', aesKey, iv)
-  return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8').replace(/[ \t\r\n]+$/, '')
+  return Buffer.concat([decipher.update(data), decipher.final()])
+    .toString('utf8')
+    .replace(/[ \t\r\n]+$/, '')
 }
 
 /** Test helper: encrypt like interactsh-server (RSA-OAEP SHA-256 AES-256-CTR). */
-export function encryptMessage(publicKeyPem: string, plaintext: string): { aesKey: string; data: string } {
+export function encryptMessage(
+  publicKeyPem: string,
+  plaintext: string,
+): { aesKey: string; data: string } {
   const aesKey = randomBytes(32)
   const wrapped = publicEncrypt(
     {
@@ -140,32 +165,18 @@ export function encryptMessage(publicKeyPem: string, plaintext: string): { aesKe
   )
   const iv = randomBytes(16)
   const cipher = createCipheriv('aes-256-ctr', aesKey, iv)
-  const encrypted = Buffer.concat([iv, cipher.update(plaintext, 'utf8'), cipher.final()])
+  const encrypted = Buffer.concat([
+    iv,
+    cipher.update(plaintext, 'utf8'),
+    cipher.final(),
+  ])
   return {
     aesKey: wrapped.toString('base64'),
     data: encrypted.toString('base64'),
   }
 }
 
-export function redactSecrets(value: unknown): unknown {
-  const secretKey = /token|secret|authorization|api[_-]?key|private/i
-  const walk = (input: unknown): unknown => {
-    if (Array.isArray(input)) return input.map(walk)
-    if (input && typeof input === 'object') {
-      const out: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
-        out[k] = secretKey.test(k) ? '[redacted]' : walk(v)
-      }
-      return out
-    }
-    return input
-  }
-  return walk(value)
-}
-
-export function renderSafe(_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> {
-  return [{ type: 'text', text: JSON.stringify(redactSecrets(value)) }]
-}
+export { redactSecrets, renderSafe } from '../../neo-runtime/redact.mjs'
 
 function authHeaders(token: string | undefined): Record<string, string> {
   if (!token) return { 'content-type': 'application/json' }
@@ -182,13 +193,17 @@ async function readJson(
     signal?: AbortSignal
   },
 ): Promise<{ status: number; body: unknown }> {
-  const res = await fetchImpl(url, init)
+  const signal = init.signal
+    ? AbortSignal.any([init.signal, AbortSignal.timeout(15000)])
+    : AbortSignal.timeout(15000)
+  const res = await fetchImpl(url, { ...init, signal })
   const text = await res.text()
+  if (text.length > 2097152) throw new Error('OAST response exceeds quota')
   if (!text) return { status: res.status, body: null }
   try {
     return { status: res.status, body: JSON.parse(text) }
   } catch {
-    return { status: res.status, body: { error: text } }
+    throw new Error(`invalid OAST JSON response (${res.status})`)
   }
 }
 
@@ -211,13 +226,18 @@ function serverHost(base: string): string {
 }
 
 function payloadFor(session: OastSession): OastRegistration {
-  const nonce = randomId(13)
+  const nonce = randomNonce()
   const domain = `${session.id}${nonce}.${session.serverHost}`
-  const url = session.kind === 'http' ? `http://${domain}` : domain
+  const url =
+    session.kind === 'http'
+      ? `${session.callbackScheme}://${domain}${session.callbackPort}`
+      : domain
   return { id: session.id, url, domain }
 }
 
-export function normalizeInteraction(raw: Record<string, unknown>): Interaction {
+export function normalizeInteraction(
+  raw: Record<string, unknown>,
+): Interaction {
   const out: Interaction = {
     protocol: String(raw.protocol ?? ''),
     uniqueId: String(raw['unique-id'] ?? raw.uniqueId ?? ''),
@@ -248,12 +268,19 @@ function parseInteraction(raw: unknown): Interaction | null {
   return normalizeInteraction(raw as Record<string, unknown>)
 }
 
-export async function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+export async function defaultSleep(
+  ms: number,
+  signal?: AbortSignal,
+): Promise<void> {
   if (ms <= 0) return
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => resolve(), ms)
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
     const onAbort = () => {
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       const err = new Error('aborted')
       err.name = 'AbortError'
       reject(err)
@@ -267,6 +294,29 @@ export async function defaultSleep(ms: number, signal?: AbortSignal): Promise<vo
   })
 }
 
+async function authorizeOast(opts: ClientOptions): Promise<void> {
+  const env = opts.env ?? process.env
+  const task_id = requireTaskId(undefined, env)
+  if (!env.NEO_TASK_TOKEN) throw new Error('OAST task credentials required')
+  const result = await readJson(
+    opts.fetch ?? (globalThis.fetch as FetchLike),
+    `${env.NEO_BROKER_URL ?? 'http://broker:8091'}/oast/authorize`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ task_id, task_token: env.NEO_TASK_TOKEN }),
+      signal: opts.signal,
+    },
+  )
+  if (
+    result.status !== 200 ||
+    (result.body as { allowed?: boolean })?.allowed !== true
+  )
+    throw new Error(
+      'OAST execution not authorized: task status or current plan approval',
+    )
+}
+
 export async function registerOast(
   args: { kind: OastKind },
   opts: ClientOptions = {},
@@ -275,13 +325,53 @@ export async function registerOast(
     throw new Error('kind must be http or dns')
   }
   const env = opts.env ?? process.env
+  const taskId = requireTaskId(undefined, env)
+  const callbackDomain = env.INTERACTSH_CALLBACK_DOMAIN
+  if (
+    !callbackDomain ||
+    !/^(?=.{1,253}$)[a-z0-9]+(?:[a-z0-9.-]*[a-z0-9])?$/i.test(callbackDomain)
+  )
+    throw new Error(
+      'INTERACTSH_CALLBACK_DOMAIN must name a configured callback DNS suffix',
+    )
+  if (args.kind === 'dns' && env.INTERACTSH_DNS_ENABLED !== 'true')
+    throw new Error('DNS OAST unavailable: wildcard resolver is not configured')
+  const callbackScheme = env.INTERACTSH_CALLBACK_SCHEME ?? 'http'
+  if (!['http', 'https'].includes(callbackScheme))
+    throw new Error('unsupported callback scheme')
+  const port = env.INTERACTSH_CALLBACK_PORT
+  if (port && (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535))
+    throw new Error('invalid callback port')
+  const callbackPort =
+    port &&
+    !(
+      (callbackScheme === 'http' && port === '80') ||
+      (callbackScheme === 'https' && port === '443')
+    )
+      ? `:${port}`
+      : ''
+  const callbackBase = env.INTERACTSH_CALLBACK_BASE_URL
+    ? new URL(env.INTERACTSH_CALLBACK_BASE_URL)
+    : undefined
+  if (
+    callbackBase &&
+    (!['http:', 'https:'].includes(callbackBase.protocol) ||
+      callbackBase.username ||
+      callbackBase.password)
+  )
+    throw new Error('invalid callback base URL')
   const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
   const store = opts.store ?? defaultStore
+  await authorizeOast(opts)
+  await cleanupOast(opts)
+  if (store.size >= 128) throw new Error('OAST registration quota exceeded')
   const base = (opts.interactshUrl ?? interactshUrl(env)).replace(/\/+$/, '')
   const token = opts.token ?? interactshToken(env)
   const correlationId = randomId(20)
   const secretKey = randomUUID()
-  const keys = generateClientKeys()
+  const keys = await generateClientKeysAsync()
+  if (opts.signal?.aborted) throw new Error('OAST registration aborted')
+  await authorizeOast(opts)
 
   const { status, body } = await readJson(fetchImpl, `${base}/register`, {
     method: 'POST',
@@ -295,7 +385,9 @@ export async function registerOast(
   })
 
   if (status < 200 || status >= 300) {
-    throw new Error(`oast_register failed (${status}): ${errorMessage(body, 'http error')}`)
+    throw new Error(
+      `oast_register failed (${status}): ${errorMessage(body, 'http error')}`,
+    )
   }
 
   const session: OastSession = {
@@ -303,14 +395,30 @@ export async function registerOast(
     secretKey,
     privateKeyPem: keys.privateKeyPem,
     publicKeyPem: keys.publicKeyPem,
-    serverHost: serverHost(base),
+    serverHost: callbackDomain,
+    taskId,
+    createdAt: (opts.now ?? Date.now)(),
+    callbackScheme,
+    callbackPort,
     kind: args.kind,
   }
   store.set(correlationId, session)
-  return payloadFor(session)
+  const timer = setTimeout(() => {
+    void cleanupOast(opts).catch(() => {})
+  }, TTL + 1000)
+  ;(timer as unknown as { unref?: () => void }).unref?.()
+  const payload = payloadFor(session)
+  if (callbackBase && args.kind === 'http') {
+    payload.url = `${callbackBase.href.replace(/\/+$/, '')}/${payload.domain}`
+  }
+  return payload
 }
 
-async function pollOnce(session: OastSession, opts: ClientOptions): Promise<Interaction[]> {
+async function pollOnce(
+  session: OastSession,
+  opts: ClientOptions,
+): Promise<Interaction[]> {
+  await authorizeOast(opts)
   const env = opts.env ?? process.env
   const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
   const base = (opts.interactshUrl ?? interactshUrl(env)).replace(/\/+$/, '')
@@ -325,28 +433,38 @@ async function pollOnce(session: OastSession, opts: ClientOptions): Promise<Inte
     signal: opts.signal,
   })
   if (status < 200 || status >= 300) {
-    throw new Error(`oast_poll failed (${status}): ${errorMessage(body, 'http error')}`)
+    throw new Error(
+      `oast_poll failed (${status}): ${errorMessage(body, 'http error')}`,
+    )
   }
 
-  const obj = body && typeof body === 'object' ? (body as Record<string, unknown>) : {}
+  const obj =
+    body && typeof body === 'object' ? (body as Record<string, unknown>) : {}
   const out: Interaction[] = []
   const aesKey = typeof obj.aes_key === 'string' ? obj.aes_key : ''
   const data = Array.isArray(obj.data) ? obj.data : []
+  if (data.length > 256) throw new Error('OAST interaction quota exceeded')
+  if (data.length && !aesKey)
+    throw new Error('OAST encrypted response lacks AES key')
   for (const item of data) {
-    if (typeof item !== 'string') continue
+    if (typeof item !== 'string') throw new Error('invalid OAST encrypted row')
     try {
-      const plain = aesKey ? decryptMessage(session.privateKeyPem, aesKey, item) : item
+      const plain = aesKey
+        ? decryptMessage(session.privateKeyPem, aesKey, item)
+        : item
       const parsed = parseInteraction(plain)
-      if (parsed) out.push(parsed)
+      if (!parsed) throw new Error('invalid OAST interaction')
+      out.push(parsed)
     } catch {
-      // skip undecryptable rows
+      throw new Error('OAST interaction decryption or decoding failed')
     }
   }
   for (const extra of [obj.extra, obj.tlddata]) {
     if (!Array.isArray(extra)) continue
     for (const item of extra) {
       const parsed = parseInteraction(item)
-      if (parsed) out.push(parsed)
+      if (!parsed) throw new Error('invalid OAST interaction')
+      out.push(parsed)
     }
   }
   return out
@@ -359,7 +477,24 @@ export async function pollOast(
   const store = opts.store ?? defaultStore
   const session = store.get(args.id)
   if (!session) throw new Error(`unknown oast id: ${args.id}`)
-  const waitMs = Math.max(0, (args.wait_seconds ?? 0) * 1000)
+  const taskId = requireTaskId(undefined, opts.env ?? process.env)
+  if (session.taskId !== taskId)
+    throw new Error('OAST session belongs to another task')
+  if ((opts.now ?? Date.now)() - session.createdAt >= TTL) {
+    await cleanupOast(opts)
+    throw new Error('OAST session expired')
+  }
+  const seconds = args.wait_seconds ?? 0
+  if (!Number.isFinite(seconds) || seconds < 0 || seconds > 60)
+    throw new Error('wait_seconds must be between 0 and 60')
+  const waitMs = seconds * 1000
+  const outerSignal = opts.signal
+  opts = {
+    ...opts,
+    signal: outerSignal
+      ? AbortSignal.any([outerSignal, AbortSignal.timeout(waitMs + 15000)])
+      : AbortSignal.timeout(waitMs + 15000),
+  }
   const now = opts.now ?? Date.now
   const sleep = opts.sleep ?? defaultSleep
   const deadline = now() + waitMs
@@ -370,5 +505,64 @@ export async function pollOast(
     const remaining = deadline - now()
     if (remaining <= 0) return interactions
     await sleep(Math.min(1000, remaining), opts.signal)
+  }
+}
+
+export async function generateClientKeysAsync(): Promise<{
+  publicKeyB64: string
+  privateKeyPem: string
+  publicKeyPem: string
+}> {
+  const pair = await new Promise<{ publicKey: Buffer; privateKey: string }>(
+    (resolve, reject) =>
+      generateKeyPair(
+        'rsa',
+        {
+          modulusLength: 2048,
+          publicKeyEncoding: { type: 'spki', format: 'der' },
+          privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+        },
+        (err, publicKey, privateKey) =>
+          err ? reject(err) : resolve({ publicKey, privateKey }),
+      ),
+  )
+  return {
+    publicKeyB64: Buffer.from(encodePublicKeyPem(pair.publicKey)).toString(
+      'base64',
+    ),
+    privateKeyPem: pair.privateKey,
+    publicKeyPem: `-----BEGIN PUBLIC KEY-----\n${pair.publicKey
+      .toString('base64')
+      .match(/.{1,64}/g)!
+      .join('\n')}\n-----END PUBLIC KEY-----\n`,
+  }
+}
+export async function cleanupOast(
+  opts: ClientOptions = {},
+  all = false,
+): Promise<void> {
+  const store = opts.store ?? defaultStore
+  const env = opts.env ?? process.env
+  const taskId = requireTaskId(undefined, env)
+  const now = (opts.now ?? Date.now)()
+  for (const [id, session] of store) {
+    if (all ? session.taskId !== taskId : now - session.createdAt < TTL)
+      continue
+    const response = await readJson(
+      opts.fetch ?? (globalThis.fetch as FetchLike),
+      `${opts.interactshUrl ?? interactshUrl(env)}/deregister`,
+      {
+        method: 'POST',
+        headers: authHeaders(opts.token ?? interactshToken(env)),
+        body: JSON.stringify({
+          'correlation-id': id,
+          'secret-key': session.secretKey,
+        }),
+        signal: opts.signal,
+      },
+    )
+    if (response.status < 200 || response.status >= 300)
+      throw new Error(`OAST deregistration failed (${response.status})`)
+    store.delete(id)
   }
 }

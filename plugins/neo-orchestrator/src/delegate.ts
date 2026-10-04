@@ -1,3 +1,9 @@
+import {
+  requireTaskId,
+  taskHeaders,
+  readJson,
+} from '../../neo-runtime/contracts.mjs'
+import { childRun, controlCall } from './policy.ts'
 import { randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -9,8 +15,11 @@ import {
   PresetError,
 } from './presets.ts'
 
-/** World-writable so sandbox USER neo can write under DSH-created agent dirs. */
-export const CHILD_ARTIFACT_MKDIR_OPTS = { recursive: true, mode: 0o777 } as const
+/** Shared task group can write; unrelated users have no access. */
+export const CHILD_ARTIFACT_MKDIR_OPTS = {
+  recursive: true,
+  mode: 0o770,
+} as const
 
 export interface ParallelChild {
   agent_id?: string
@@ -39,13 +48,16 @@ export interface ChildRunResult extends SpecialistResult {
 }
 
 export interface DelegateResult {
-  ok: true
+  ok: boolean
   backend: 'spawn' | 'in-process'
   results: ChildRunResult[]
 }
 
 export interface SubagentStart {
-  start: (name: string, request: Record<string, unknown>) => Promise<{
+  start: (
+    name: string,
+    request: Record<string, unknown>,
+  ) => Promise<{
     id?: string
     localAgent?: unknown
     result: Promise<{
@@ -67,6 +79,7 @@ export interface DelegateOptions {
   callerAgentId?: string
   subagents?: SubagentStart
   concurrency?: number
+  runToken?: string
   now?: () => Date
   onSpawnedAgent?: (agent: unknown, agentId: string) => void
   /** Host-registered global tool names. Unknown allowlist entries are dropped so tools.restrict() can apply. */
@@ -79,11 +92,20 @@ export interface DelegateOptions {
 }
 
 const DEFAULT_CONCURRENCY = 4
+const activeByTask = new Map<string, number>()
+const totalByTask = new Map<string, number>()
 const JUDGE_ONLY_CHILD = 'verifier'
 
 /** Agent-plane builtins plus bash (YAML that allows bash can keep it). */
 export const DSH_AGENT_PLANE_TOOLS = [
-  'bash', 'read', 'write', 'edit', 'glob', 'grep', 'skill', 'web_search',
+  'bash',
+  'read',
+  'write',
+  'edit',
+  'glob',
+  'grep',
+  'skill',
+  'web_search',
 ] as const
 
 /**
@@ -91,7 +113,9 @@ export const DSH_AGENT_PLANE_TOOLS = [
  * `schemas(parent)` failure still runs `schemas()` so plugin tools are not stripped.
  */
 export function listKnownGlobalTools(
-  tools: { schemas?: (scope?: unknown) => Array<{ name?: string }> } | undefined,
+  tools:
+    | { schemas?: (scope?: unknown) => Array<{ name?: string }> }
+    | undefined,
   parent?: unknown,
 ): string[] | undefined {
   if (!tools || typeof tools.schemas !== 'function') return undefined
@@ -111,14 +135,18 @@ export function listKnownGlobalTools(
   }
   const names = [...fromParent, ...fromGlobal]
     .map((schema) => schema?.name)
-    .filter((name): name is string => typeof name === 'string' && name.length > 0)
+    .filter(
+      (name): name is string => typeof name === 'string' && name.length > 0,
+    )
   return [...new Set([...names, ...DSH_AGENT_PLANE_TOOLS])]
 }
 
 export function parseParallelGroup(raw: unknown): ParallelChild[] | undefined {
   if (raw == null) return undefined
   if (!Array.isArray(raw)) {
-    throw new PresetError('parallel_group must be an array of {agent_id?, prompt}')
+    throw new PresetError(
+      'parallel_group must be an array of {agent_id?, prompt}',
+    )
   }
   return raw.map((item, i) => {
     if (typeof item === 'string') return { prompt: item }
@@ -133,16 +161,20 @@ export function parseParallelGroup(raw: unknown): ParallelChild[] | undefined {
   })
 }
 
-export function resolveChildren(args: DelegateArgs): Array<{ agent_id: string; prompt: string }> {
+export function resolveChildren(
+  args: DelegateArgs,
+): Array<{ agent_id: string; prompt: string }> {
   const topId = typeof args.agent_id === 'string' ? args.agent_id : ''
   const topPrompt = typeof args.prompt === 'string' ? args.prompt : ''
   const group = parseParallelGroup(args.parallel_group)
   if (group) {
-    if (group.length === 0) throw new PresetError('parallel_group must not be empty')
+    if (group.length === 0)
+      throw new PresetError('parallel_group must not be empty')
     return group.map((item, i) => {
       const agent_id = item.agent_id || topId
       const prompt = item.prompt || topPrompt
-      if (!agent_id) throw new PresetError(`parallel_group[${i}] missing agent_id`)
+      if (!agent_id)
+        throw new PresetError(`parallel_group[${i}] missing agent_id`)
       if (!prompt) throw new PresetError(`parallel_group[${i}] missing prompt`)
       return { agent_id, prompt }
     })
@@ -193,15 +225,28 @@ export function filterAllowlist(
   return allow.filter((name) => set.has(name))
 }
 
-export function assertCallerPolicy(callerAgentId: string | undefined, children: Array<{ agent_id: string }>): void {
+export function assertCallerPolicy(
+  callerAgentId: string | undefined,
+  children: Array<{ agent_id: string }>,
+): void {
+  if (
+    callerAgentId === 'planner' &&
+    children.some((c) => c.agent_id !== 'explore')
+  )
+    throw new PresetError('planner may only delegate to explore')
   if (callerAgentId !== 'judge') return
   const bad = children.filter((c) => c.agent_id !== JUDGE_ONLY_CHILD)
   if (bad.length > 0) {
-    throw new PresetError(`judge may only delegate to ${JUDGE_ONLY_CHILD} (got ${bad.map((c) => c.agent_id).join(', ')})`)
+    throw new PresetError(
+      `judge may only delegate to ${JUDGE_ONLY_CHILD} (got ${bad.map((c) => c.agent_id).join(', ')})`,
+    )
   }
 }
 
-export function specialistUnavailable(agentId: string, reason: string): SpecialistResult {
+export function specialistUnavailable(
+  agentId: string,
+  reason: string,
+): SpecialistResult {
   return {
     summary: reason,
     artifacts: [],
@@ -211,41 +256,138 @@ export function specialistUnavailable(agentId: string, reason: string): Speciali
   }
 }
 
-export function normalizeSpecialist(value: unknown, fallbackSummary = ''): SpecialistResult {
-  const rec = value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-  const summary = typeof rec.summary === 'string' && rec.summary.trim() !== ''
-    ? rec.summary
-    : fallbackSummary
+export function normalizeSpecialist(
+  value: unknown,
+  fallbackSummary = '',
+): SpecialistResult {
+  const rec =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
+  const summary =
+    typeof rec.summary === 'string' && rec.summary.trim() !== ''
+      ? rec.summary
+      : fallbackSummary
   const artifacts = Array.isArray(rec.artifacts)
     ? rec.artifacts.filter((a): a is string => typeof a === 'string')
     : []
   const findings_claimed = Array.isArray(rec.findings_claimed)
-    ? rec.findings_claimed.filter((f): f is Record<string, unknown> => !!f && typeof f === 'object' && !Array.isArray(f))
+    ? rec.findings_claimed.filter(
+        (f): f is Record<string, unknown> =>
+          !!f && typeof f === 'object' && !Array.isArray(f),
+      )
     : []
   const next_agent = typeof rec.next_agent === 'string' ? rec.next_agent : ''
   const blockers = Array.isArray(rec.blockers)
     ? rec.blockers.filter((b): b is string => typeof b === 'string')
     : []
   if (!summary) {
-    return { summary: fallbackSummary || 'child returned no summary', artifacts, findings_claimed, next_agent, blockers }
+    return {
+      summary: fallbackSummary || 'child returned no summary',
+      artifacts,
+      findings_claimed,
+      next_agent,
+      blockers,
+    }
   }
   return { summary, artifacts, findings_claimed, next_agent, blockers }
 }
 
-export async function executeDelegate(args: DelegateArgs, opts: DelegateOptions): Promise<DelegateResult> {
+export async function executeDelegate(
+  args: DelegateArgs,
+  opts: DelegateOptions,
+): Promise<DelegateResult> {
+  const taskId = requireTaskId(
+    undefined,
+    opts.env ?? process.env,
+    opts.parent as any,
+  )
+  const authoritative = await controlCall(
+    opts.env ?? process.env,
+    opts.parent,
+    `/tasks/${taskId}`,
+    undefined,
+    opts.signal,
+  )
+  if (!['fast', 'thorough'].includes(authoritative.mode))
+    throw new Error('invalid authoritative task mode')
+  opts = {
+    ...opts,
+    env: { ...(opts.env ?? process.env), NEO_MODE: authoritative.mode },
+  }
+  if (opts.parent && typeof opts.parent === 'object') {
+    ;(opts.parent as any).options ??= {}
+    ;(opts.parent as any).options.neoMode = authoritative.mode
+  }
   const children = resolveChildren(args)
+  const active = activeByTask.get(taskId) ?? 0
+  const total = totalByTask.get(taskId) ?? 0
+  const limit = intEnv(opts.env?.NEO_TASK_CONCURRENCY, 8)
+  if (active + children.length > limit)
+    throw new PresetError('task shared concurrency limit exceeded')
+  if (total + children.length > 128)
+    throw new PresetError('task run budget exceeded')
+  const depth = Number((opts.parent as any)?.options?.neoDepth ?? 0)
+  if (depth >= 8) throw new PresetError('task delegation depth exceeded')
   for (const child of children) getPreset(opts.presets, child.agent_id)
   assertParallelGroupSize(opts.presets, children)
   assertCallerPolicy(opts.callerAgentId, children)
   throwIfAborted(opts.signal)
 
-  const concurrency = Math.max(1, opts.concurrency ?? intEnv(opts.env?.NEO_DELEGATE_CONCURRENCY, DEFAULT_CONCURRENCY))
+  const concurrency = Math.max(
+    1,
+    opts.concurrency ??
+      intEnv(opts.env?.NEO_DELEGATE_CONCURRENCY, DEFAULT_CONCURRENCY),
+  )
   const useSpawn = Boolean(opts.subagents?.start && opts.parent)
   const backend: 'spawn' | 'in-process' = useSpawn ? 'spawn' : 'in-process'
-  const results = await mapPool(children, concurrency, (child, index) => runOne(child, index, opts, backend), opts.signal)
-  return { ok: true, backend, results }
+  activeByTask.set(taskId, active + children.length)
+  totalByTask.set(taskId, total + children.length)
+  if (totalByTask.size > 256)
+    totalByTask.delete(totalByTask.keys().next().value!)
+  try {
+    const results = await mapPool(
+      children,
+      concurrency,
+      async (child, index) => {
+        try {
+          return await runOne(child, index, opts, backend)
+        } catch (error) {
+          return writeChildOutput(
+            getPreset(opts.presets, child.agent_id),
+            randomUUID(),
+            backend,
+            specialistUnavailable(
+              child.agent_id,
+              error instanceof Error ? error.message : 'child failed',
+            ),
+            join(
+              opts.workspaceDir,
+              'tasks',
+              requireTaskId(
+                undefined,
+                opts.env ?? process.env,
+                opts.parent as any,
+              ),
+            ),
+          )
+        }
+      },
+      opts.signal,
+    )
+    return {
+      ok: backend === 'spawn' && results.every((r) => r.blockers.length === 0),
+      backend,
+      results,
+    }
+  } finally {
+    const remaining = Math.max(
+      0,
+      (activeByTask.get(taskId) ?? 0) - children.length,
+    )
+    if (remaining) activeByTask.set(taskId, remaining)
+    else activeByTask.delete(taskId)
+  }
 }
 
 async function runOne(
@@ -257,14 +399,90 @@ async function runOne(
   throwIfAborted(opts.signal)
   const preset = getPreset(opts.presets, child.agent_id)
   const env = opts.env ?? {}
-  const runId = makeRunId(preset.id, index, opts.now)
+  const identity = await childRun(
+    opts.env ?? process.env,
+    opts.parent,
+    ['planner', 'judge', 'verifier', 'explore', 'swarm'].includes(preset.id)
+      ? preset.id
+      : 'specialist',
+    opts.signal,
+  )
+  const runId = identity.id
+  const dir = join(
+    opts.workspaceDir,
+    'tasks',
+    requireTaskId(undefined, opts.env ?? process.env, opts.parent as any),
+    'agents',
+    preset.id,
+    runId,
+  )
+  const childOpts = {
+    ...opts,
+    workspaceDir: join(
+      opts.workspaceDir,
+      'tasks',
+      requireTaskId(undefined, opts.env ?? process.env, opts.parent as any),
+    ),
+    runToken: identity.run_token,
+  }
   const closed = failClosedReason(preset, env)
-  const structured = closed
-    ? specialistUnavailable(preset.id, closed)
-    : backend === 'spawn'
-      ? await runSpawn(preset, child.prompt, runId, opts)
-      : inProcessRecord(preset, child.prompt)
-  return writeChildOutput(preset, runId, backend, structured, opts.workspaceDir)
+  const finishAgent = {
+    options: {
+      neoRunId: runId,
+      neoRunToken: identity.run_token,
+      neoTaskId: neoTaskIdForChild(opts),
+    },
+  }
+  try {
+    mkdirSync(dir, CHILD_ARTIFACT_MKDIR_OPTS)
+    const structured = closed
+      ? specialistUnavailable(preset.id, closed)
+      : backend === 'spawn'
+        ? await runSpawn(preset, child.prompt, runId, childOpts)
+        : inProcessRecord(preset, child.prompt)
+    const result = writeChildOutput(
+      preset,
+      runId,
+      backend,
+      structured,
+      childOpts.workspaceDir,
+    )
+    await controlCall(
+      env,
+      finishAgent,
+      `/tasks/${neoTaskIdForChild(opts)}/runs/${runId}/finish`,
+      {
+        status:
+          closed || backend === 'in-process'
+            ? 'unavailable'
+            : structured.blockers.length
+              ? 'failed'
+              : 'completed',
+        outcome: {
+          summary: structured.summary,
+          artifacts: result.artifacts,
+          blockers: structured.blockers,
+        },
+      },
+      opts.signal,
+    )
+    return result
+  } catch (error) {
+    try {
+      await controlCall(
+        env,
+        finishAgent,
+        `/tasks/${neoTaskIdForChild(opts)}/runs/${runId}/finish`,
+        {
+          status: opts.signal?.aborted ? 'cancelled' : 'failed',
+          outcome: {
+            error: error instanceof Error ? error.message : 'child failed',
+          },
+        },
+      )
+    } catch {}
+    throw error
+  }
 }
 
 async function runSpawn(
@@ -273,16 +491,23 @@ async function runSpawn(
   runId: string,
   opts: DelegateOptions,
 ): Promise<SpecialistResult> {
+  const timeout = intEnv(opts.env?.NEO_CHILD_TIMEOUT_MS, 900000)
+  const deadline = AbortSignal.timeout(timeout)
+  opts = {
+    ...opts,
+    signal: opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline,
+  }
   const subagents = opts.subagents!
-  const skillsNote = preset.skills.length > 0
-    ? `\nActivate at most 3 skills from: ${preset.skills.join(', ')}.`
-    : ''
+  const skillsNote =
+    preset.skills.length > 0
+      ? `\nActivate at most 3 skills from: ${preset.skills.join(', ')}.`
+      : ''
   const memoryNote = await formatTaskMemoryInject(opts)
   const childPrompt = [
     prompt,
     '',
     'Return structured output with summary and artifacts[]. Prefer sandbox_exec over bash for scans.',
-    `Write working files under /workspace/agents/${preset.id}/.`,
+    `Write working files under ${join(opts.workspaceDir, 'agents', preset.id, runId)}/.`,
     skillsNote,
   ].join('\n')
   const injectBlocks = memoryNote
@@ -295,10 +520,28 @@ async function runSpawn(
     prompt: [{ type: 'text', text: childPrompt }],
     parent: opts.parent,
     signal: opts.signal,
-    persona: preset.persona,
+    persona: preset.persona.replaceAll(
+      '/workspace',
+      join(opts.workspaceDir, 'agents', preset.id, runId),
+    ),
     toolFilter: {
       allow: filterAllowlist(
-        preset.tool_allowlist,
+        preset.tool_allowlist.filter(
+          (name) =>
+            name !== 'bash' &&
+            (!preset.readonly ||
+              ![
+                'sandbox_exec',
+                'deploy_up',
+                'deploy_down',
+                'browser_evaluate',
+                'browser_eval',
+                'browser_act',
+                'browser_navigate',
+                'traffic_replay',
+                'oast_register',
+              ].includes(name)),
+        ),
         opts.knownGlobalTools,
         opts.parentVisibleTools,
       ),
@@ -306,43 +549,44 @@ async function runSpawn(
     outputSchema: SPECIALIST_OUTPUT_SCHEMA,
     agentOptions: {
       neoAgentId: preset.id,
+      neoMode: opts.env?.NEO_MODE,
+      neoRunId: runId,
+      neoDepth: Number((opts.parent as any)?.options?.neoDepth ?? 0) + 1,
+      neoRunToken: opts.runToken,
       ...(neoTaskId ? { neoTaskId } : {}),
       ...workhorse,
     },
   })
   try {
-    if (run.localAgent && opts.onSpawnedAgent) opts.onSpawnedAgent(run.localAgent, preset.id)
+    if (run.localAgent && opts.onSpawnedAgent)
+      opts.onSpawnedAgent(run.localAgent, preset.id)
     await injectIntoAgent(run.localAgent, injectBlocks)
-    const result = await run.result
+    const result = await awaitAbortable(run.result, opts.signal)
     const text = Array.isArray(result.output)
-      ? result.output.map((b) => (typeof b?.text === 'string' ? b.text : '')).join('')
+      ? result.output
+          .map((b) => (typeof b?.text === 'string' ? b.text : ''))
+          .join('')
       : ''
     if (result.stopReason && result.stopReason !== 'completed') {
       return specialistUnavailable(
         preset.id,
-        result.diagnostic || `subagent ${preset.id} ended (${result.stopReason})`,
+        result.diagnostic ||
+          `subagent ${preset.id} ended (${result.stopReason})`,
       )
     }
-    return normalizeSpecialist(result.structured, text || `${preset.id} completed`)
+    return normalizeSpecialist(
+      result.structured,
+      text || `${preset.id} completed`,
+    )
   } finally {
     await run.dispose()
   }
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
-const UUID_EXTRACT_RE =
-  /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
-
-function taskIdFromSession(sessionId: string | undefined): string | undefined {
-  if (!sessionId) return undefined
-  const m = sessionId.match(UUID_EXTRACT_RE)
-  return m ? m[0].toLowerCase() : undefined
-}
-
 /** Host-resolved workhorse route. Both provider and model must be set, or the child inherits. */
-export function workhorseAgentOptions(env: Record<string, string | undefined> | undefined): {
+export function workhorseAgentOptions(
+  env: Record<string, string | undefined> | undefined,
+): {
   provider?: string
   model?: string
   reasoningEffort?: string
@@ -350,7 +594,8 @@ export function workhorseAgentOptions(env: Record<string, string | undefined> | 
   const provider = env?.NEO_RESOLVED_WORKHORSE_PROVIDER?.trim() ?? ''
   const model = env?.NEO_RESOLVED_WORKHORSE_MODEL?.trim() ?? ''
   if (provider === '' || model === '') return {}
-  const reasoningEffort = env?.NEO_RESOLVED_WORKHORSE_REASONING_EFFORT?.trim() ?? ''
+  const reasoningEffort =
+    env?.NEO_RESOLVED_WORKHORSE_REASONING_EFFORT?.trim() ?? ''
   return {
     provider,
     model,
@@ -358,47 +603,61 @@ export function workhorseAgentOptions(env: Record<string, string | undefined> | 
   }
 }
 
-function neoTaskIdForChild(opts: DelegateOptions): string | undefined {
-  const env = opts.env ?? process.env
-  const parent = opts.parent && typeof opts.parent === 'object'
-    ? opts.parent as { id?: unknown; options?: { neoTaskId?: unknown } }
-    : undefined
-  const fromOptions = typeof parent?.options?.neoTaskId === 'string'
-    ? parent.options.neoTaskId.trim()
-    : undefined
-  const parentId = typeof parent?.id === 'string' ? parent.id : undefined
-  const candidates = [fromOptions, env.NEO_TASK_ID?.trim(), taskIdFromSession(parentId)]
-  return candidates.find((v) => v && UUID_RE.test(v))
+function neoTaskIdForChild(opts: DelegateOptions): string {
+  return requireTaskId(undefined, opts.env ?? process.env, opts.parent as any)
 }
 
-async function formatTaskMemoryInject(opts: DelegateOptions): Promise<string | undefined> {
+async function formatTaskMemoryInject(
+  opts: DelegateOptions,
+): Promise<string | undefined> {
   const env = opts.env ?? process.env
-  const taskId = neoTaskIdForChild(opts)
-  if (!taskId) return undefined
-  const control = (env.CONTROL_URL ?? 'http://control:8090').replace(/\/+$/, '')
-  const fetchImpl = globalThis.fetch as
-    | ((input: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; text(): Promise<string> }>)
-    | undefined
-  if (typeof fetchImpl !== 'function') return undefined
-  try {
-    const res = await fetchImpl(`${control}/tasks/${encodeURIComponent(taskId)}/memory`, {
-      signal: opts.signal,
-    })
-    const raw = await res.text()
-    if (!res.ok || !raw) return undefined
-    const body = JSON.parse(raw) as Record<string, unknown>
-    return [
-      'Shared task memory (injected on subagent/start):',
-      JSON.stringify({
-        insights: Array.isArray(body.insights) ? body.insights : [],
-        facts: Array.isArray(body.facts) ? body.facts : [],
-        todos: Array.isArray(body.todos) ? body.todos : [],
-        files: Array.isArray(body.files) ? body.files : [],
-      }),
-    ].join('\n')
-  } catch {
-    return undefined
-  }
+  const response = await readJson(
+    globalThis.fetch,
+    `${env.CONTROL_URL ?? 'http://control:8090'}/tasks/${neoTaskIdForChild(opts)}/memory`,
+    { headers: taskHeaders(env, opts.parent as any), signal: opts.signal },
+  )
+  if (
+    response.status !== 200 ||
+    !response.body ||
+    !['insights', 'facts', 'todos', 'files'].every((key) =>
+      Array.isArray(response.body[key]),
+    )
+  )
+    throw new Error('task memory unavailable or malformed')
+  return (
+    'Shared task memory (injected on subagent/start):\n' +
+    JSON.stringify(response.body)
+  )
+}
+
+function awaitAbortable<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return promise
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      cleanup()
+      reject(signal.reason ?? new Error('child deadline exceeded'))
+    }
+    const cleanup = () => signal.removeEventListener('abort', abort)
+    if (signal.aborted) {
+      promise.catch(() => {})
+      abort()
+      return
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    promise.then(
+      (value) => {
+        cleanup()
+        resolve(value)
+      },
+      (error) => {
+        cleanup()
+        reject(error)
+      },
+    )
+  })
 }
 
 async function injectIntoAgent(
@@ -411,22 +670,27 @@ async function injectIntoAgent(
   try {
     // Agent.inject queues a UserMessage. A bare content-block array has no
     // source, and the turn then throws reading message.source.kind.
-    await Promise.resolve(agent.inject({
-      role: 'user',
-      id: randomUUID(),
-      content: blocks,
-      source: { kind: 'user' },
-    }))
+    await Promise.resolve(
+      agent.inject({
+        role: 'user',
+        id: randomUUID(),
+        content: blocks,
+        source: { kind: 'user' },
+      }),
+    )
   } catch {
     // best-effort; a child that rejects inject still runs its start prompt
   }
 }
 
-function inProcessRecord(preset: AgentPreset, prompt: string): SpecialistResult {
+function inProcessRecord(
+  preset: AgentPreset,
+  prompt: string,
+): SpecialistResult {
   return {
     summary:
-      `${preset.id} recorded by the in-process runner (ctx.subagents.start missing). `
-      + 'No model child ran; this is not a second agent loop.',
+      `${preset.id} recorded by the in-process runner (ctx.subagents.start missing). ` +
+      'No model child ran; this is not a second agent loop.',
     artifacts: [],
     findings_claimed: [],
     next_agent: '',
@@ -445,10 +709,10 @@ function writeChildOutput(
   structured: SpecialistResult,
   workspaceDir: string,
 ): ChildRunResult {
-  const dir = join(workspaceDir, 'agents', preset.id)
+  const dir = join(workspaceDir, 'agents', preset.id, runId)
   // mode on mkdirSync is umask-masked (often 0755); chmod forces other-write for neo.
   mkdirSync(dir, { ...CHILD_ARTIFACT_MKDIR_OPTS })
-  chmodSync(dir, 0o777)
+  chmodSync(dir, 0o770)
   const artifactPath = join(dir, `${runId}.json`).replace(/\\/g, '/')
   const artifacts = structured.artifacts.includes(artifactPath)
     ? structured.artifacts
@@ -465,12 +729,8 @@ function writeChildOutput(
     blockers: structured.blockers,
   }
   writeFileSync(artifactPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8')
+  chmodSync(artifactPath, 0o660)
   return result
-}
-
-function makeRunId(agentId: string, index: number, now?: () => Date): string {
-  const d = (now ? now() : new Date()).toISOString().replace(/[:.]/g, '-')
-  return `${d}-${agentId}-${index}`
 }
 
 function intEnv(raw: string | undefined, fallback: number): number {
@@ -504,6 +764,10 @@ async function mapPool<T, R>(
     }
   }
   const n = Math.min(limit, items.length)
-  await Promise.all(Array.from({ length: n }, () => worker()))
+  const settled = await Promise.allSettled(
+    Array.from({ length: n }, () => worker()),
+  )
+  const failed = settled.find((r) => r.status === 'rejected')
+  if (failed?.status === 'rejected') throw failed.reason
   return out
 }

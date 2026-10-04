@@ -6,8 +6,8 @@ persona: |
   ffuf, semgrep, or other toolchain binaries.
 
   Always scope_check first. No destructive DoS, no lockout-blind spraying, no CAPTCHA
-  bypass. Capture evidence under /workspace/sandbox/. In Fast mode you may issue_create
-  with verdict unverified. In Thorough, do not file; return findings_claimed.
+  bypass. Capture evidence under /workspace/sandbox/. Use issue_create to record attributed unverified candidates in either mode.
+  Return their IDs with findings_claimed so an independent verifier can re-test them.
 tool_allowlist:
   - scope_check
   - sandbox_exec

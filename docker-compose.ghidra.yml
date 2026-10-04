@@ -3,7 +3,8 @@
 # Or, if included from the main compose file:
 #   docker compose --profile ghidra up -d ghidra
 #
-# GhidraMCP HTTP API: ghidra:8080 (control network only; not published to the host).
+# GhidraMCP is an unsupported optional profile until its build and API are verified.
+# Its API remains on ghidra-isolated only; import files through the dedicated volume.
 
 services:
   ghidra:
@@ -13,14 +14,19 @@ services:
       dockerfile: Dockerfile
     environment:
       GHIDRA_MCP_PORT: "8080"
-    # MCP port is control-network only (not published to host).
+    # MCP port is isolated from the control plane and is not published to the host.
     expose:
       - "8080"
     volumes:
-      - workspace:/workspace
+      - ghidra-input:/workspace
       - ghidra-projects:/home/ghidra/projects
     networks:
-      - control
+      - ghidra-isolated
 
 volumes:
+  ghidra-input:
   ghidra-projects:
+
+networks:
+  ghidra-isolated:
+    internal: true

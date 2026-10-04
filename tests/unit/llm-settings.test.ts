@@ -118,6 +118,64 @@ describe('renderOwnedSettings', () => {
   })
 })
 
+describe('subscription oauth providers', () => {
+  it('chatgpt maps onto openai-codex without an API key', () => {
+    const selection = resolveLlmSelection({
+      NEO_LLM_PROVIDER: 'chatgpt',
+    })
+    assert.equal(selection.kind, 'oauth')
+    assert.equal(selection.route, 'openai-codex')
+    assert.equal(selection.model, 'gpt-5.5')
+    assert.equal(selection.apiKey, '')
+    const yaml = renderOwnedSettings(selection)
+    assert.match(yaml, /provider: "openai-codex"/)
+    assert.match(yaml, /model: "gpt-5.5"/)
+    assert.match(yaml, /openai-codex:\s*\{\}/)
+    assert.doesNotMatch(yaml, /apiKeyEnv:/)
+    assert.equal(mappedCredentialEnv(selection).OPENAI_API_KEY, undefined)
+  })
+
+  it('claude and grok use catalog defaults and keep an explicit model', () => {
+    const claude = resolveLlmSelection({ NEO_LLM_PROVIDER: 'claude' })
+    assert.equal(claude.route, 'anthropic')
+    assert.equal(claude.model, 'claude-sonnet-4-5')
+    const grok = resolveLlmSelection({
+      NEO_LLM_PROVIDER: 'grok',
+      NEO_LLM_MODEL: 'grok-4.5',
+    })
+    assert.equal(grok.route, 'xai')
+    assert.equal(grok.model, 'grok-4.5')
+  })
+
+  it('chatgpt plus openai API key is two routes', () => {
+    const profile = resolveLlmProfile({
+      NEO_LLM_PROVIDER: 'chatgpt',
+      NEO_LLM_WORKHORSE_PROVIDER: 'openai',
+      NEO_LLM_WORKHORSE_MODEL: 'gpt-4.1',
+      NEO_LLM_WORKHORSE_API_KEY: 'sk-openai',
+    })
+    const yaml = renderProfileSettings('', profile)
+    assert.match(yaml, /provider: "openai-codex"/)
+    assert.match(yaml, /openai-codex:\s*\{\}/)
+    assert.match(yaml, /apiKeyEnv: "OPENAI_API_KEY"/)
+    assert.equal(mappedProfileEnv(profile).OPENAI_API_KEY, 'sk-openai')
+    assert.equal(mappedProfileEnv(profile).NEO_RESOLVED_WORKHORSE_PROVIDER, 'openai')
+  })
+
+  it('rejects claude subscription and anthropic API key on one profile', () => {
+    assert.throws(
+      () => resolveLlmProfile({
+        NEO_LLM_PROVIDER: 'claude',
+        NEO_LLM_WORKHORSE_PROVIDER: 'anthropic',
+        NEO_LLM_WORKHORSE_MODEL: 'claude-sonnet-4-5',
+        NEO_LLM_WORKHORSE_API_KEY: 'sk-ant',
+      }),
+      (error: unknown) => error instanceof LlmSettingsError
+        && /claude subscription and anthropic API key cannot share the anthropic route/.test((error as Error).message),
+    )
+  })
+})
+
 describe('validation', () => {
   it('missing key for a cloud provider fails', () => {
     assert.throws(
@@ -473,6 +531,15 @@ describe('renderer CLI', () => {
     })
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /OPENAI_API_KEY or NEO_LLM_API_KEY/)
+  })
+
+  it('chatgpt --print succeeds without an API key', () => {
+    const result = runRenderer(['--print'], {
+      NEO_LLM_PROVIDER: 'chatgpt',
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(result.stdout, /provider: "openai-codex"/)
+    assert.doesNotMatch(result.stdout, /apiKeyEnv:/)
   })
 
   it('writes neo-llm.patch.yml under --dsh-home', async () => {

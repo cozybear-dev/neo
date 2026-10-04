@@ -15,11 +15,21 @@ declare module 'node:crypto' {
 }
 
 declare module 'node:fs/promises' {
-  export function mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>
-  export function writeFile(path: string, data: string | Uint8Array): Promise<void>
+  export function realpath(path: string): Promise<string>
+  export function mkdir(
+    path: string,
+    opts?: { recursive?: boolean },
+  ): Promise<void>
+  export function writeFile(
+    path: string,
+    data: string | Uint8Array,
+  ): Promise<void>
   export function readFile(path: string, enc?: string): Promise<string>
   export function appendFile(path: string, data: string): Promise<void>
-  export function rm(path: string, opts?: { recursive?: boolean; force?: boolean }): Promise<void>
+  export function rm(
+    path: string,
+    opts?: { recursive?: boolean; force?: boolean },
+  ): Promise<void>
 }
 
 declare module 'node:child_process' {
@@ -45,7 +55,10 @@ declare module '@deepseek-ai/dsh-tools' {
     parameters: Record<string, unknown>
     output: {
       schema: unknown
-      render: (args: unknown, value: unknown) => Array<{ type: string; text: string }>
+      render: (
+        args: unknown,
+        value: unknown,
+      ) => Array<{ type: string; text: string }>
     }
     execute: (
       args: Record<string, unknown>,
@@ -58,4 +71,8 @@ declare module '@deepseek-ai/cordis' {
   export interface Context {
     tools: { register: (tool: unknown) => void }
   }
+}
+declare module 'node:path' {
+  export const sep: string
+  export function resolve(...paths: string[]): string
 }

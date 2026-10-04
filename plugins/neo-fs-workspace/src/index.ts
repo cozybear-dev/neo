@@ -10,6 +10,7 @@ import {
   type PromptApi,
 } from './mode.ts'
 import { createTools } from './tools.ts'
+import { workspaceGuard } from './guard.ts'
 
 export const name = 'neo-fs-workspace'
 export const inject = ['fs', 'tools']
@@ -17,6 +18,7 @@ export { createTools } from './tools.ts'
 
 export function apply(ctx: Context): void {
   const root = workspaceRoot(process.env)
+  ctx.tools.guard(workspaceGuard(root))
   ctx.on('fs/observed', (target: FsTarget, observation: { kind: string }) => {
     relaxObservedFile(target, observation, {
       workspaceRoot: root,

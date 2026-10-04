@@ -13,6 +13,7 @@ tool_allowlist:
   - browser_act
   - browser_eval
   - browser_screenshot
+  - read_image
   - memory_get
   - memory_update
   - issue_query

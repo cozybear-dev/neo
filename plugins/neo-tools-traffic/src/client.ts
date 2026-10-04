@@ -1,4 +1,5 @@
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { requireTaskId } from '../../neo-runtime/contracts.mjs'
+import { appendFile, mkdir, readFile, writeFile, open } from 'node:fs/promises'
 
 export type EnvMap = Record<string, string | undefined>
 
@@ -10,7 +11,13 @@ export type FetchLike = (
     body?: string
     signal?: AbortSignal
   },
-) => Promise<{ status: number; headers?: { forEach(fn: (value: string, key: string) => void): void } | Record<string, string>; text(): Promise<string> }>
+) => Promise<{
+  status: number
+  headers?:
+    | { forEach(fn: (value: string, key: string) => void): void }
+    | Record<string, string>
+  text(): Promise<string>
+}>
 
 export type FsLike = {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>
@@ -58,25 +65,7 @@ const HOP_BY_HOP = new Set([
   'content-length',
 ])
 
-export function redactSecrets(value: unknown): unknown {
-  const secretKey = /token|secret|authorization|api[_-]?key|private|password|passwd|cookie/i
-  const walk = (input: unknown): unknown => {
-    if (Array.isArray(input)) return input.map(walk)
-    if (input && typeof input === 'object') {
-      const out: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
-        out[k] = secretKey.test(k) ? '[redacted]' : walk(v)
-      }
-      return out
-    }
-    return input
-  }
-  return walk(value)
-}
-
-export function renderSafe(_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> {
-  return [{ type: 'text', text: JSON.stringify(redactSecrets(value)) }]
-}
+export { redactSecrets, renderSafe } from '../../neo-runtime/redact.mjs'
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -88,15 +77,31 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 export function trafficPath(opts: ClientOptions = {}): string {
   const env = opts.env ?? process.env
-  return opts.trafficPath ?? env.TRAFFIC_LOG ?? DEFAULT_TRAFFIC_PATH
+  return (
+    opts.trafficPath ??
+    `${env.NEO_WORKSPACE_BASE ?? '/workspace'}/tasks/${requireTaskId(undefined, env)}/traffic/http.jsonl`
+  )
 }
 
 function nodeFs(): FsLike {
   return {
-    mkdir,
-    writeFile,
-    readFile: (path, enc) => readFile(path, (enc ?? 'utf8') as 'utf8'),
-    appendFile,
+    mkdir: (p, o) => mkdir(p, { ...o, mode: 0o750 }),
+    writeFile: (p, d) => writeFile(p, d, { mode: 0o640 }),
+    readFile: async (path) => {
+      const file = await open(path, 'r')
+      try {
+        if ((await file.stat()).size > 16777216)
+          throw new Error('traffic store exceeds read quota')
+        const buffer = Buffer.alloc(16777217)
+        const { bytesRead } = await file.read(buffer, 0, buffer.length, 0)
+        if (bytesRead > 16777216)
+          throw new Error('traffic store exceeds read quota')
+        return Buffer.from(buffer.subarray(0, bytesRead)).toString('utf8')
+      } finally {
+        await file.close()
+      }
+    },
+    appendFile: (p, d) => appendFile(p, d, { mode: 0o640 }),
   }
 }
 
@@ -105,14 +110,19 @@ function dirOf(filePath: string): string {
   return i <= 0 ? '.' : filePath.slice(0, i)
 }
 
-export async function appendTraffic(rec: CapturedRequest, opts: ClientOptions = {}): Promise<void> {
+export async function appendTraffic(
+  rec: CapturedRequest,
+  opts: ClientOptions = {},
+): Promise<void> {
   const fs = opts.fs ?? nodeFs()
   const path = trafficPath(opts)
   await fs.mkdir(dirOf(path), { recursive: true })
   await fs.appendFile(path, `${JSON.stringify(rec)}\n`)
 }
 
-export async function readTraffic(opts: ClientOptions = {}): Promise<CapturedRequest[]> {
+export async function readTraffic(
+  opts: ClientOptions = {},
+): Promise<CapturedRequest[]> {
   const fs = opts.fs ?? nodeFs()
   const path = trafficPath(opts)
   let text = ''
@@ -123,13 +133,15 @@ export async function readTraffic(opts: ClientOptions = {}): Promise<CapturedReq
     if (code === 'ENOENT') return []
     throw err
   }
+  if (Buffer.byteLength(text) > 16777216)
+    throw new Error('traffic store exceeds read quota')
   const out: CapturedRequest[] = []
   for (const line of text.split('\n')) {
     if (!line.trim()) continue
     try {
       out.push(JSON.parse(line) as CapturedRequest)
     } catch {
-      // skip malformed lines
+      throw new Error('corrupt traffic record')
     }
   }
   return out
@@ -146,7 +158,10 @@ export async function searchTraffic(
   return rows.filter((row) => JSON.stringify(row).toLowerCase().includes(query))
 }
 
-export function assertSameDestination(originalUrl: string, nextUrl: string): void {
+export function assertSameDestination(
+  originalUrl: string,
+  nextUrl: string,
+): void {
   let original: URL
   let next: URL
   try {
@@ -163,8 +178,13 @@ export function assertSameDestination(originalUrl: string, nextUrl: string): voi
 function headerMap(headers: unknown): Record<string, string> {
   const out: Record<string, string> = {}
   if (!headers || typeof headers !== 'object') return out
-  if ('forEach' in headers && typeof (headers as { forEach: unknown }).forEach === 'function') {
-    ;(headers as { forEach(fn: (value: string, key: string) => void): void }).forEach((value, key) => {
+  if (
+    'forEach' in headers &&
+    typeof (headers as { forEach: unknown }).forEach === 'function'
+  ) {
+    ;(
+      headers as { forEach(fn: (value: string, key: string) => void): void }
+    ).forEach((value, key) => {
       out[key] = value
     })
     return out
@@ -175,10 +195,19 @@ function headerMap(headers: unknown): Record<string, string> {
   return out
 }
 
-function stripHopByHop(headers: Record<string, string>): Record<string, string> {
+function stripHopByHop(
+  headers: Record<string, string>,
+): Record<string, string> {
   const out: Record<string, string> = {}
+  const nominated = new Set(
+    (headers.connection ?? '')
+      .toLowerCase()
+      .split(',')
+      .map((s) => s.trim()),
+  )
   for (const [k, v] of Object.entries(headers)) {
-    if (HOP_BY_HOP.has(k.toLowerCase())) continue
+    if (HOP_BY_HOP.has(k.toLowerCase()) || nominated.has(k.toLowerCase()))
+      continue
     out[k] = v
   }
   return out
@@ -203,16 +232,25 @@ export async function replayTraffic(
   let url = rec.url
   if (typeof edits.url === 'string') {
     assertSameDestination(rec.url, edits.url)
-    url = edits.url
+    url = new URL(edits.url, rec.url).href
   }
 
   let method = rec.method
-  if (typeof edits.method === 'string' && edits.method.trim()) method = edits.method.trim()
+  if (typeof edits.method === 'string' && edits.method.trim())
+    method = edits.method.trim()
 
-  let headers = { ...rec.headers }
-  if (edits.headers && typeof edits.headers === 'object' && !Array.isArray(edits.headers)) {
-    for (const [k, v] of Object.entries(edits.headers as Record<string, unknown>)) {
-      if (typeof v === 'string') headers[k] = v
+  let headers = Object.fromEntries(
+    Object.entries(rec.headers).map(([k, v]) => [k.toLowerCase(), v]),
+  )
+  if (
+    edits.headers &&
+    typeof edits.headers === 'object' &&
+    !Array.isArray(edits.headers)
+  ) {
+    for (const [k, v] of Object.entries(
+      edits.headers as Record<string, unknown>,
+    )) {
+      if (typeof v === 'string') headers[k.toLowerCase()] = v
     }
   }
 
@@ -225,16 +263,58 @@ export async function replayTraffic(
   }
 
   const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchLike)
-  const res = await fetchImpl(url, {
-    method,
-    headers: stripHopByHop(headers),
-    body: method.toUpperCase() === 'GET' || method.toUpperCase() === 'HEAD' ? undefined : body,
-    signal: opts.signal,
-  })
-  const text = await res.text()
+  const env = opts.env ?? process.env
+  const task_id = requireTaskId(undefined, env)
+  if (!env.NEO_TASK_TOKEN) throw new Error('task credentials required')
+  const canonical = new URL(url)
+  if (
+    !['http:', 'https:'].includes(canonical.protocol) ||
+    canonical.username ||
+    canonical.password
+  )
+    throw new Error('unsupported replay URL')
+  if (body && Buffer.byteLength(body) > 262144)
+    throw new Error('request body exceeds quota')
+  const res = await fetchImpl(
+    `${env.NEO_BROKER_URL ?? 'http://broker:8091'}/request`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        task_id,
+        task_token: env.NEO_TASK_TOKEN,
+        capability: 'traffic',
+        url: canonical.href,
+        method,
+        headers: stripHopByHop(headers),
+        body_base64:
+          method.toUpperCase() === 'GET' ||
+          method.toUpperCase() === 'HEAD' ||
+          body === undefined
+            ? undefined
+            : Buffer.from(body).toString('base64'),
+      }),
+      signal: opts.signal
+        ? AbortSignal.any([opts.signal, AbortSignal.timeout(30000)])
+        : AbortSignal.timeout(30000),
+    },
+  )
+  if (res.status !== 200)
+    throw new Error(`broker replay denied (${res.status})`)
+  const response = JSON.parse(await res.text()) as {
+    status: number
+    headers: Record<string, string>
+    body_base64: string
+  }
+  if (
+    !Number.isInteger(response.status) ||
+    typeof response.body_base64 !== 'string' ||
+    response.body_base64.length > 2800000
+  )
+    throw new Error('invalid or oversized broker response')
   return {
-    status: res.status,
-    headers: headerMap(res.headers),
-    body: text,
+    status: response.status,
+    headers: response.headers,
+    body: Buffer.from(response.body_base64, 'base64').toString('utf8'),
   }
 }

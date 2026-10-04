@@ -13,6 +13,15 @@ declare const Buffer: {
 }
 
 declare module 'node:crypto' {
+  export function generateKeyPair(
+    type: 'rsa',
+    options: object,
+    callback: (
+      err: Error | null,
+      publicKey: Buffer,
+      privateKey: string,
+    ) => void,
+  ): void
   export const constants: { RSA_PKCS1_OAEP_PADDING: number }
   export function generateKeyPairSync(
     type: 'rsa',
@@ -23,7 +32,10 @@ declare module 'node:crypto' {
     },
   ): { publicKey: Buffer; privateKey: string }
   export function privateDecrypt(options: object, buffer: Buffer): Buffer
-  export function publicEncrypt(options: object, buffer: Buffer | string): Buffer
+  export function publicEncrypt(
+    options: object,
+    buffer: Buffer | string,
+  ): Buffer
   export function createDecipheriv(
     alg: string,
     key: Buffer,
@@ -45,7 +57,10 @@ declare module '@deepseek-ai/dsh-tools' {
     parameters: Record<string, unknown>
     output: {
       schema: unknown
-      render: (args: unknown, value: unknown) => Array<{ type: string; text: string }>
+      render: (
+        args: unknown,
+        value: unknown,
+      ) => Array<{ type: string; text: string }>
     }
     execute: (
       args: Record<string, unknown>,

@@ -1,3 +1,7 @@
+import {
+  persistRawArtifact,
+  taskWorkspace,
+} from '../../neo-runtime/artifacts.mjs'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   createPostExecuteHandler,
@@ -23,7 +27,15 @@ export {
   resolveObjective,
 } from './summarize.js'
 
-function resolveDefaultModel(ctx: Context, exec: ToolExecution): { provider?: string; model?: string } {
+export function resolveDefaultModel(
+  ctx: Context,
+  exec: ToolExecution,
+): { provider?: string; model?: string } {
+  const opts = exec.agent?.options
+  if (opts?.provider && opts?.model) {
+    return { provider: opts.provider, model: opts.model }
+  }
+
   const fromService = ctx.get('agentDefaultModel') as
     | { currentSelection?: () => { provider: string; model: string } }
     | undefined
@@ -32,17 +44,16 @@ function resolveDefaultModel(ctx: Context, exec: ToolExecution): { provider?: st
     return { provider: selection.provider, model: selection.model }
   }
 
-  const opts = exec.agent?.options
-  if (opts?.provider && opts?.model) {
-    return { provider: opts.provider, model: opts.model }
-  }
-
   return {}
 }
 
 function resolveLlm(ctx: Context) {
   const llm = (ctx.get('llm') ?? ctx.llm) as
-    | { stream?: (options: Record<string, unknown>) => AsyncIterable<Record<string, unknown>> }
+    | {
+        stream?: (
+          options: Record<string, unknown>,
+        ) => AsyncIterable<Record<string, unknown>>
+      }
     | undefined
   if (!llm || typeof llm.stream !== 'function') return null
   return llmCompleteFromStream(llm.stream.bind(llm))
@@ -54,6 +65,8 @@ export function apply(ctx: Context): void {
     createPostExecuteHandler({
       getLlm: () => resolveLlm(ctx),
       getDefaultModel: (exec) => resolveDefaultModel(ctx, exec),
+      persist: (text) =>
+        persistRawArtifact(text, { root: taskWorkspace(process.env) }),
     }),
   )
 }

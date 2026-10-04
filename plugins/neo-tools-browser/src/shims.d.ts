@@ -1,11 +1,12 @@
 declare const process: { env: Record<string, string | undefined> }
 
-type Buffer = {
+type Buffer = Uint8Array & {
   toString(enc?: string): string
   length: number
 }
 
 declare const Buffer: {
+  byteLength(data: string): number
   from(data: string | Uint8Array, enc?: string): Buffer
 }
 
@@ -14,10 +15,32 @@ declare module 'node:crypto' {
 }
 
 declare module 'node:fs/promises' {
-  export function mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>
-  export function writeFile(path: string, data: string | Uint8Array): Promise<void>
+  export function open(
+    path: string,
+    flags: string,
+    mode?: number,
+  ): Promise<{
+    writeFile(data: string): Promise<void>
+    stat(): Promise<{ size: number }>
+    chmod(mode: number): Promise<void>
+    sync(): Promise<void>
+    close(): Promise<void>
+  }>
+  export function mkdir(
+    path: string,
+    opts?: { recursive?: boolean; mode?: number },
+  ): Promise<void>
+  export function writeFile(
+    path: string,
+    data: string | Uint8Array,
+    opts?: { mode?: number },
+  ): Promise<void>
   export function readFile(path: string, enc?: string): Promise<string>
-  export function appendFile(path: string, data: string): Promise<void>
+  export function appendFile(
+    path: string,
+    data: string,
+    opts?: { mode?: number },
+  ): Promise<void>
 }
 
 declare module 'playwright' {
@@ -35,7 +58,10 @@ declare module '@deepseek-ai/dsh-tools' {
     parameters: Record<string, unknown>
     output: {
       schema: unknown
-      render: (args: unknown, value: unknown) => Array<{ type: string; text: string }>
+      render: (
+        args: unknown,
+        value: unknown,
+      ) => Array<{ type: string; text: string }>
     }
     execute: (
       args: Record<string, unknown>,

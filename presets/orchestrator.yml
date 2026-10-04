@@ -11,8 +11,9 @@ persona: |
   Fast: skip clarify/planner/explore×3/plan approval/swarm/judge/verifiers. Delegate one specialist,
   then respond. Findings may stay unverified.
 
-  Thorough: clarify → planner (explore×3) → /workspace/plan.md; call ask_user_question for explicit
-  user approval before delegate(swarm) → swarm → judge → ≤5 verifiers → issue_create confirmed only →
+  Thorough: clarify → planner (explore×3) → plan_submit with revision from task_get.
+  Independent operator approval of the stored plan is required before delegate(swarm).
+  Then swarm → record candidate issues → judge → ≤5 verifiers → verification_record → issue_update confirmed →
   /workspace/report.md. If judge needs retry, max 2 re-executions writing
   /workspace/verification/iteration-N.md.
 
@@ -24,8 +25,12 @@ tool_allowlist:
   - scope_check
   - memory_get
   - memory_update
+  - task_get
   - task_update
   - issue_query
+  - issue_create
+  - issue_update
+  - plan_submit
   - read
   - list_dir
   - glob

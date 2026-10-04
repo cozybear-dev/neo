@@ -1,5 +1,5 @@
 # Pin DeepSeek Harness, overlay the neo profile, serve dsh --profile neo.
-FROM node:22-bookworm
+FROM node:22.23.3-bookworm@sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7
 
 # dsh@0.2 builds with tsx and Node's type stripper (engines: ^22.19.0 || >=24).
 RUN node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 19)) { console.error("node " + process.versions.node + " is below 22.19"); process.exit(1); }'
@@ -36,6 +36,9 @@ RUN pnpm run build
 RUN printf '%s\n' '#!/bin/sh' 'exec node /opt/dsh/apps/cli/lib/bin.js "$@"' > /usr/local/bin/dsh \
   && chmod +x /usr/local/bin/dsh
 
+COPY package.json package-lock.json /opt/neo/
+RUN cd /opt/neo && npm ci --ignore-scripts
+COPY plugins/neo-runtime /opt/neo/plugins/neo-runtime
 COPY plugins/neo-profile /opt/neo/plugins/neo-profile
 COPY plugins/neo-tools-scope /opt/neo/plugins/neo-tools-scope
 COPY plugins/neo-tools-memory /opt/neo/plugins/neo-tools-memory
@@ -53,16 +56,20 @@ COPY skills /opt/neo/skills
 COPY workflows /opt/neo/workflows
 COPY tests/harness /opt/neo/tests/harness
 COPY docker/dsh/render-llm-settings.mjs /opt/neo/docker/dsh/render-llm-settings.mjs
+COPY docker/dsh/import-llm-oauth.mjs /opt/neo/docker/dsh/import-llm-oauth.mjs
+COPY docker/dsh/resolve-task.mjs /opt/neo/docker/dsh/resolve-task.mjs
 COPY docker/dsh/entrypoint.sh /opt/neo/docker/dsh/entrypoint.sh
 COPY docker/dsh/build-plugins.sh /opt/neo/docker/dsh/build-plugins.sh
 RUN chmod +x /opt/neo/docker/dsh/entrypoint.sh /opt/neo/docker/dsh/build-plugins.sh \
-  && chmod +r /opt/neo/docker/dsh/render-llm-settings.mjs \
+  && chmod +r /opt/neo/docker/dsh/render-llm-settings.mjs /opt/neo/docker/dsh/import-llm-oauth.mjs \
   && /opt/neo/docker/dsh/build-plugins.sh
 
 ENV DSH_HOME=/home/node/.dsh \
     DSH_WEB_SEARCH_PROVIDER=exa \
     NODE_ENV=production
 
+RUN mkdir -p /workspace /home/node/.dsh && chown -R node:node /workspace /home/node/.dsh
+USER node
 WORKDIR /workspace
 EXPOSE 3080
 ENTRYPOINT ["/opt/neo/docker/dsh/entrypoint.sh"]

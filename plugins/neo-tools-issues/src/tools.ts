@@ -1,4 +1,11 @@
-import { createIssue, queryIssues, updateIssue, type AgentRef, type ClientOptions } from './client.ts'
+import { renderSafe } from '../../neo-runtime/redact.mjs'
+import {
+  createIssue,
+  queryIssues,
+  updateIssue,
+  type AgentRef,
+  type ClientOptions,
+} from './client.ts'
 
 export type ToolDef = {
   name: string
@@ -6,7 +13,10 @@ export type ToolDef = {
   parameters: Record<string, unknown>
   output: {
     schema: unknown
-    render: (args: unknown, value: unknown) => Array<{ type: 'text'; text: string }>
+    render: (
+      args: unknown,
+      value: unknown,
+    ) => Array<{ type: 'text'; text: string }>
   }
   execute: (
     args: Record<string, unknown>,
@@ -14,8 +24,11 @@ export type ToolDef = {
   ) => unknown | Promise<unknown>
 }
 
-function render(_args: unknown, value: unknown): Array<{ type: 'text'; text: string }> {
-  return [{ type: 'text', text: JSON.stringify(value) }]
+function render(
+  _args: unknown,
+  value: unknown,
+): Array<{ type: 'text'; text: string }> {
+  return renderSafe(_args, value)
 }
 
 function agentOpt(exec: { agent?: unknown }): AgentRef | undefined {
@@ -29,14 +42,23 @@ const issueObject = {
   additionalProperties: true,
   properties: {
     id: { type: 'string' as const },
-    task_id: { oneOf: [{ type: 'string' as const }, { type: 'null' as const }] },
+    task_id: {
+      oneOf: [{ type: 'string' as const }, { type: 'null' as const }],
+    },
     title: { type: 'string' as const },
     severity: { type: 'string' as const },
     status: { type: 'string' as const },
     host: { oneOf: [{ type: 'string' as const }, { type: 'null' as const }] },
-    evidence_paths: { type: 'array' as const, items: { type: 'string' as const } },
-    reproduction: { oneOf: [{ type: 'string' as const }, { type: 'null' as const }] },
-    verdict: { oneOf: [{ type: 'string' as const }, { type: 'null' as const }] },
+    evidence_paths: {
+      type: 'array' as const,
+      items: { type: 'string' as const },
+    },
+    reproduction: {
+      oneOf: [{ type: 'string' as const }, { type: 'null' as const }],
+    },
+    verdict: {
+      oneOf: [{ type: 'string' as const }, { type: 'null' as const }],
+    },
   },
 }
 
@@ -46,10 +68,18 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
     {
       name: 'issue_create',
       description:
-        'File a finding. Thorough-mode tasks require verdict=confirmed; otherwise the tool returns {ok:false,error} without throwing.',
+        'Record an attributed candidate finding. Confirm using independent persisted verification and issue_update.',
       parameters: {
-        title: { type: 'string', required: true, description: 'Finding title.' },
-        severity: { type: 'string', required: true, description: 'Severity (e.g. critical, high, medium, low, info).' },
+        title: {
+          type: 'string',
+          required: true,
+          description: 'Finding title.',
+        },
+        severity: {
+          type: 'string',
+          required: true,
+          description: 'Severity (e.g. critical, high, medium, low, info).',
+        },
         host: { type: 'string', description: 'Affected host.' },
         evidence_paths: {
           type: 'array',
@@ -57,12 +87,10 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
           description: 'Workspace paths with proof artifacts.',
         },
         reproduction: { type: 'string', description: 'Reproduction steps.' },
-        verdict: {
+        task_id: {
           type: 'string',
-          required: true,
-          description: 'Finding verdict. Thorough mode requires confirmed.',
+          description: 'Task id; defaults to NEO_TASK_ID.',
         },
-        task_id: { type: 'string', description: 'Task id; defaults to NEO_TASK_ID.' },
       },
       output: {
         schema: {
@@ -96,9 +124,13 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
             evidence_paths: Array.isArray(args.evidence_paths)
               ? args.evidence_paths.map((p) => String(p))
               : undefined,
-            reproduction: typeof args.reproduction === 'string' ? args.reproduction : undefined,
-            verdict: typeof args.verdict === 'string' ? args.verdict : undefined,
-            task_id: typeof args.task_id === 'string' ? args.task_id : undefined,
+            reproduction:
+              typeof args.reproduction === 'string'
+                ? args.reproduction
+                : undefined,
+
+            task_id:
+              typeof args.task_id === 'string' ? args.task_id : undefined,
           },
           { ...options, signal: exec.signal, agent: agentOpt(exec) },
         )
@@ -106,12 +138,21 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
     },
     {
       name: 'issue_query',
-      description: 'List issues, optionally filtered by host, severity, or status.',
+      description:
+        'List issues, optionally filtered by host, severity, or status.',
       parameters: {
         host: { type: 'string' },
         severity: { type: 'string' },
         status: { type: 'string' },
-        task_id: { type: 'string', description: 'Task id; defaults to NEO_TASK_ID or session UUID.' },
+        limit: {
+          type: 'number',
+          description: 'Page size, 1 to 100 (default 50).',
+        },
+        offset: { type: 'number', description: 'Page offset (default 0).' },
+        task_id: {
+          type: 'string',
+          description: 'Task id; defaults to authorized NEO_TASK_ID.',
+        },
       },
       output: {
         schema: { type: 'array', items: issueObject },
@@ -121,9 +162,13 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         return queryIssues(
           {
             host: typeof args.host === 'string' ? args.host : undefined,
-            severity: typeof args.severity === 'string' ? args.severity : undefined,
+            severity:
+              typeof args.severity === 'string' ? args.severity : undefined,
             status: typeof args.status === 'string' ? args.status : undefined,
-            task_id: typeof args.task_id === 'string' ? args.task_id : undefined,
+            limit: typeof args.limit === 'number' ? args.limit : undefined,
+            offset: typeof args.offset === 'number' ? args.offset : undefined,
+            task_id:
+              typeof args.task_id === 'string' ? args.task_id : undefined,
           },
           { ...options, signal: exec.signal, agent: agentOpt(exec) },
         )
@@ -134,8 +179,22 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
       description: 'Update an issue status and optional comment.',
       parameters: {
         id: { type: 'string', required: true, description: 'Issue id.' },
+        revision: {
+          type: 'number',
+          required: true,
+          description: 'Current issue revision.',
+        },
+        verification_id: {
+          type: 'string',
+          description:
+            'Persisted independent verification id for confirmation.',
+        },
         status: { type: 'string', required: true, description: 'New status.' },
-        comment: { type: 'string', description: 'Optional comment (not rendered if it contains secrets).' },
+        comment: {
+          type: 'string',
+          description:
+            'Optional comment (not rendered if it contains secrets).',
+        },
       },
       output: {
         schema: {
@@ -151,8 +210,14 @@ export function createTools(deps?: ClientOptions): ToolDef[] {
         return updateIssue(
           {
             id: String(args.id ?? ''),
+            revision: Number(args.revision),
+            verification_id:
+              typeof args.verification_id === 'string'
+                ? args.verification_id
+                : undefined,
             status: typeof args.status === 'string' ? args.status : undefined,
-            comment: typeof args.comment === 'string' ? args.comment : undefined,
+            comment:
+              typeof args.comment === 'string' ? args.comment : undefined,
           },
           { ...options, signal: exec.signal, agent: agentOpt(exec) },
         )

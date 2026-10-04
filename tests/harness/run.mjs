@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, symlinkSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { DeepSeekHarness } from '/opt/dsh/packages/sdk/client/lib/index.js'
@@ -22,9 +23,45 @@ const WORKHORSE_KEYS = [
 function startControl() {
   const server = createServer((req, res) => {
     const path = (req.url ?? '/').split('?')[0]
+    if (req.method === 'POST' && path.endsWith('/runs')) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          id: randomUUID(),
+          role: 'explore',
+          run_token: 'fixture-run-token',
+        }),
+      )
+      return
+    }
     if (req.method === 'GET' && /^\/tasks\/[^/]+\/memory$/.test(path)) {
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ insights: [], facts: [], todos: [], files: [] }))
+      res.end(
+        JSON.stringify({
+          revision: 0,
+          insights: [],
+          facts: [],
+          todos: [],
+          files: [],
+        }),
+      )
+      return
+    }
+    if (req.method === 'POST' && path.endsWith('/finish')) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: true }))
+      return
+    }
+    if (req.method === 'GET' && path === `/tasks/${TASK_ID}`) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          id: TASK_ID,
+          mode: 'fast',
+          status: 'running',
+          revision: 0,
+        }),
+      )
       return
     }
     res.writeHead(404)
@@ -64,8 +101,10 @@ async function main() {
   const mock = await startMockMessages()
   process.env.CONTROL_URL = control.origin
   process.env.NEO_TASK_ID = TASK_ID
+  process.env.NEO_TASK_TOKEN = 'fixture-task-token'
   process.env.NEO_WORKSPACE = WORK
-  process.env.NEO_PRESETS_DIR = process.env.NEO_PRESETS_DIR || '/opt/neo/presets'
+  process.env.NEO_PRESETS_DIR =
+    process.env.NEO_PRESETS_DIR || '/opt/neo/presets'
   process.env.DEEPSEEK_BASE_URL = mock.url
   if (!process.env.DEEPSEEK_API_KEY) process.env.DEEPSEEK_API_KEY = 'mock-key'
   process.env.DSH_PERMISSION_MODE = 'danger-full-access'
@@ -83,51 +122,84 @@ async function main() {
     processCwd: WORK,
   })
 
+  let timer
   let result
   let failed
   try {
     result = await Promise.race([
       harness.run('Use the delegate tool once for the explore specialist.'),
       new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('harness timed out after 90s')), 90000)
+        timer = setTimeout(
+          () => reject(new Error('harness timed out after 90s')),
+          90000,
+        )
       }),
     ])
   } catch (error) {
     failed = error
   } finally {
+    clearTimeout(timer)
     await harness.close().catch(() => {})
     await mock.close()
     await control.close()
   }
 
   const finalResponse = result?.finalResponse ?? ''
-  const sawMemory = mock.requests.some((body) => JSON.stringify(body).includes('Shared task memory'))
-  const passed = failed == null
-    && finalResponse.includes('parent received HARNESS_CHILD_OK')
-    && sawMemory
-    && mock.servedStructuredOutput
+  const sawMemory = mock.requests.some((body) =>
+    JSON.stringify(body).includes('Shared task memory'),
+  )
+  const sawShellGuard = mock.requests.some((body) =>
+    JSON.stringify(body).includes('Neo blocks bash'),
+  )
+  const sawFileGuard = mock.requests.some((body) =>
+    JSON.stringify(body).includes('File access is limited'),
+  )
+  const passed =
+    failed == null &&
+    finalResponse.includes('parent received HARNESS_CHILD_OK') &&
+    sawMemory &&
+    mock.servedStructuredOutput &&
+    sawShellGuard &&
+    sawFileGuard
   if (!passed) {
     console.error('Harness failed.')
     console.error(`finalResponse: ${redact(finalResponse)}`)
     console.error(`branches: ${JSON.stringify(mock.branches)}`)
     console.error(`servedStructuredOutput: ${mock.servedStructuredOutput}`)
     console.error(`sawMemory: ${sawMemory}`)
+    console.error(`guards: shell=${sawShellGuard}, file=${sawFileGuard}`)
     console.error(`requestCount: ${mock.requests.length}`)
+    console.error(
+      `availableTools: ${JSON.stringify(mock.requests[0]?.tools?.map((t) => t.name))}`,
+    )
+    for (const note of result?.notifications ?? [])
+      if (/error|log/.test(note.method))
+        console.error(redact(JSON.stringify(note)))
     for (const note of result?.notifications ?? []) {
       if (note.method !== 'subagent.finished') continue
       const params = note.params ?? {}
-      console.error(`note subagent.finished: status=${redact(params.status)} stopReason=${redact(params.stopReason)}`)
+      console.error(
+        `note subagent.finished: status=${redact(params.status)} stopReason=${redact(params.stopReason)}`,
+      )
     }
-    if (failed != null) console.error(`error: ${redact(failed instanceof Error ? `${failed.name}: ${failed.message}` : failed)}`)
+    if (failed != null)
+      console.error(
+        `error: ${redact(failed instanceof Error ? `${failed.name}: ${failed.message}` : failed)}`,
+      )
     process.exit(1)
   }
-  console.log('Harness passed: parent received the explore child summary.')
+  console.log(
+    'Harness passed: parent received the explore child summary; direct shell and out-of-task reads denied.',
+  )
 }
 
 function redact(value) {
   return String(value)
     .replace(/sk-[A-Za-z0-9_-]+/g, 'sk-[redacted]')
-    .replace(/(api[_-]?key|token|authorization|secret)(['"\s:=]+)[^\s'"]+/gi, '$1$2[redacted]')
+    .replace(
+      /(api[_-]?key|token|authorization|secret)(['"\s:=]+)[^\s'"]+/gi,
+      '$1$2[redacted]',
+    )
     .slice(0, 1200)
 }
 

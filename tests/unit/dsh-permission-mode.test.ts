@@ -31,27 +31,21 @@ describe('DSH permission mode in the compose stack', () => {
     )
   })
 
-  it('makes /workspace sticky-world-writable for sandbox user neo', () => {
+  it('uses task directories and never grants world access', () => {
     const entrypoint = read('docker/dsh/entrypoint.sh')
-    assert.match(entrypoint, /chmod 1777 \/workspace/)
-    assert.match(
-      entrypoint,
-      /for d in agents explore recon research sandbox browser verification/,
-    )
-    assert.match(entrypoint, /chmod 1777 "\/workspace\/\$\{d\}"/)
-    assert.match(
-      entrypoint,
-      /find \/workspace -type f ! -perm -004 -exec chmod a\+r \{\} \+/,
-    )
+    assert.match(entrypoint, /NEO_WORKSPACE_BASE.*tasks/)
+    assert.match(entrypoint, /chmod 750/)
+    assert.doesNotMatch(entrypoint, /chmod (1777|a\+r)/)
+    assert.match(entrypoint, /mktemp/)
+    assert.match(entrypoint, /chmod 600/)
   })
 
-  it('sandbox entrypoint chmods /workspace as root then drops to neo', () => {
-    const entrypoint = read('docker/sandbox/entrypoint.sh')
-    const dockerfile = read('docker/sandbox/Dockerfile')
-    assert.match(entrypoint, /chmod 1777 \/workspace/)
-    assert.match(entrypoint, /runuser -u neo --/)
-    assert.match(dockerfile, /COPY\s+entrypoint\.sh/)
-    assert.match(dockerfile, /ENTRYPOINT\s+\["\/entrypoint\.sh"\]/)
-    assert.doesNotMatch(dockerfile, /^USER neo$/m)
+  it('runs DSH and workers as unprivileged users without sudo', () => {
+    assert.match(read('docker/dsh/Dockerfile'), /^USER node$/m)
+    assert.match(read('docker/sandbox/Dockerfile'), /^USER neo$/m)
+    assert.doesNotMatch(
+      read('docker/sandbox/Dockerfile'),
+      /NOPASSWD|^\s+sudo\s/m,
+    )
   })
 })

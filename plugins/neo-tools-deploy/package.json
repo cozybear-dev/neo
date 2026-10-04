@@ -12,5 +12,6 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-tools": "*"
-  }
+  },
+  "version": "0.1.0"
 }
